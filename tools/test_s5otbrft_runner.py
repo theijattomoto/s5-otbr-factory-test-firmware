@@ -213,6 +213,36 @@ class RunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_live_output_has_operator_test_measure_and_summary_lines(self) -> None:
+        profile, profile_hash = load_profile(DEFAULT_PROFILE)
+        messages: list[str] = []
+
+        report = run_partial_self_test(
+            S5OTBRFTClient(FakeSerial(), "FAKE"),
+            profile,
+            profile_hash,
+            requested_unit_id="BENCH-001",
+            progress=messages.append,
+        )
+
+        output = "\n".join(messages)
+        self.assertEqual(report["result"], "PARTIAL")
+        self.assertIn("[TEST] Device identity", output)
+        self.assertIn(
+            "[PASS] Device identity: S5-NODE-OTBR TBD, firmware 0.2.0",
+            output,
+        )
+        self.assertIn("[TEST] VRMS waveform", output)
+        self.assertIn("[MEASURE] VRMS raw ADC:", output)
+        self.assertIn("[PENDING] VRMS electrical verification:", output)
+        self.assertIn("[TEST] Read final manifest", output)
+        self.assertRegex(
+            output,
+            r"\[SUMMARY\] Passed \d+/\d+ executed tests"
+            r" \| Failed \d+ \| Pending \d+"
+            r" \| Captured unverified 3",
+        )
+
     def test_sequence_mismatch_is_rejected(self) -> None:
         class BadSequenceSerial(FakeSerial):
             def _response(

@@ -386,6 +386,11 @@ def run_partial_self_test(
         )
     errors: list[str] = []
     emit = progress if progress is not None else (lambda _: None)
+
+    def begin_test(name: str) -> None:
+        emit("")
+        emit(f"[TEST] {name}")
+
     report: dict[str, Any] = {
         "schema_version": 1,
         "tool": {"name": "s5otbrft_runner", "version": TOOL_VERSION},
@@ -415,7 +420,7 @@ def run_partial_self_test(
     }
 
     try:
-        emit("[TEST] Device identity and USB protocol")
+        begin_test("Device identity")
         identity_response = client.command("identity")
         identity = validate_identity(identity_response, profile)
         report["identity"] = {
@@ -427,21 +432,28 @@ def run_partial_self_test(
         }
         unit_id = requested_unit_id or derive_unit_id(identity)
         report["unit_id"] = unit_id
+        report["test_results"]["device_identity"] = "PASS"
         emit(
-            f"[PASS] Identity: {identity['base_mac']} / "
-            f"{identity['thread_eui64']}"
+            f"[PASS] Device identity: {identity_response['product']} "
+            f"{identity_response['board']}, firmware "
+            f"{identity_response['firmware']}, protocol "
+            f"{identity_response['protocol']}"
+        )
+        emit(
+            f"[MEASURE] Base MAC: {identity['base_mac']} | "
+            f"EUI-64: {identity['thread_eui64']}"
         )
 
-        emit(f"[TEST] Start traceable session: {unit_id}")
+        begin_test("Start factory session")
         require_ok(
             client.command("session.start", unit_id=unit_id),
             "session.start",
         )
-        emit("[PASS] Session started")
+        emit(f"[PASS] Session started: {unit_id}")
 
         peripheral_failures = 0
 
-        emit("[TEST] GPS UART and checksum-valid RMC reception")
+        begin_test("GPS UART")
         gps_timeout_ms = int(profile["gps_timeout_ms"])
         try:
             report["gps"] = validate_gps(
@@ -453,9 +465,11 @@ def run_partial_self_test(
             )
             report["test_results"]["gps"] = "PASS"
             emit(
-                f"[PASS] GPS UART: "
+                f"[MEASURE] GPS: "
+                f"{report['gps'].get('valid_nmea_sentences', 0)} valid NMEA | "
                 f"{report['gps']['valid_rmc_sentences']} valid RMC"
             )
+            emit("[PASS] GPS UART")
         except ProtocolError:
             raise
         except Exception as exc:
@@ -464,7 +478,7 @@ def run_partial_self_test(
             errors.append(f"gps.check: {exc}")
             emit(f"[FAIL] GPS UART: {exc}")
 
-        emit("[TEST] EG912 UART, model identity and SIM readiness")
+        begin_test("EG912 modem UART")
         modem_timeout_ms = int(profile["modem_timeout_ms"])
         try:
             report["modem"] = validate_modem(
@@ -475,7 +489,8 @@ def run_partial_self_test(
                 )
             )
             report["test_results"]["modem"] = "PASS"
-            emit(f"[PASS] EG912: {report['modem']['identity']}")
+            emit(f"[MEASURE] EG912 identity: {report['modem']['identity']}")
+            emit("[PASS] EG912 modem UART and SIM")
         except ProtocolError:
             raise
         except Exception as exc:
@@ -484,8 +499,14 @@ def run_partial_self_test(
             errors.append(f"modem.check: {exc}")
             emit(f"[FAIL] EG912: {exc}")
 
+        adc_display = {
+            "vrms": ("VRMS waveform", "VRMS"),
+            "irms": ("IRMS input", "IRMS"),
+            "dc5v": ("5 V monitor", "5 V monitor"),
+        }
         for channel in ("vrms", "irms", "dc5v"):
-            emit(f"[TEST] ADC snapshot: {channel}")
+            test_name, measure_name = adc_display[channel]
+            begin_test(test_name)
             try:
                 report["adc_snapshots"][channel] = validate_adc(
                     client.command(
@@ -502,9 +523,14 @@ def run_partial_self_test(
                     "CAPTURED_NOT_VERIFIED"
                 )
                 emit(
-                    f"[CAPTURED] ADC {channel}: avg={sample['raw_average']} "
+                    f"[MEASURE] {measure_name} raw ADC: "
+                    f"avg={sample['raw_average']} "
                     f"min={sample['raw_min']} max={sample['raw_max']} "
-                    f"noise={sample['raw_noise']} — no electrical verdict"
+                    f"noise={sample['raw_noise']}"
+                )
+                emit(
+                    f"[PENDING] {measure_name} electrical verification: "
+                    "no approved stimulus, conversion, and limits"
                 )
             except ProtocolError:
                 raise
@@ -529,7 +555,7 @@ def run_partial_self_test(
                 try:
                     passed = True
                     for level, expected in led_states:
-                        emit(f"[TEST] {display_name}: expected {expected}")
+                        begin_test(f"{display_name}: expected {expected}")
                         data = require_ok(
                             client.command(
                                 "gpio.write", name=command_name, level=level
@@ -590,11 +616,18 @@ def run_partial_self_test(
                     errors.append(f"{test_id}: {exc}")
                     emit(f"[FAIL] {display_name}: {exc}")
 
-        emit("[TEST] Capture and validate manifest")
+        begin_test("Read final manifest")
         manifest_data = require_ok(
             client.command("session.list"), "session.list"
         )
         report["manifest"] = summarize_manifest(manifest_data)
+        emit(
+            f"[MEASURE] Manifest: "
+            f"passed={len(report['manifest']['passed'])} "
+            f"failed={len(report['manifest']['failed'])} "
+            f"pending={len(report['manifest']['pending'])}"
+        )
+        emit("[PASS] Final manifest read")
 
         passed = set(report["manifest"]["passed"])
         pending = set(report["manifest"]["pending"])
@@ -638,6 +671,7 @@ def run_partial_self_test(
         report["result"] = "FAIL"
         emit(f"[FAIL] {exc}")
     finally:
+        emit("")
         emit("[CLEANUP] Restore safe outputs")
         report["safety_cleanup"]["safe"] = best_effort_command(
             client, "safe", errors
@@ -660,24 +694,34 @@ def run_partial_self_test(
             report["result"] = "FAIL"
         report["ended_utc"] = utc_now()
         report["raw_exchange"] = list(client.transcript)
-        emit("[SUMMARY] --------------------------------------------------")
-        for name, status in report["test_results"].items():
-            emit(f"[SUMMARY] {name}: {status}")
+        statuses = list(report["test_results"].values())
+        passed_count = statuses.count("PASS")
+        failed_count = statuses.count("FAIL")
+        executed_count = passed_count + failed_count
+        captured_count = statuses.count("CAPTURED_NOT_VERIFIED")
+        pending_count = len(report["manifest"]["pending"])
+        report["summary"] = {
+            "executed": executed_count,
+            "passed": passed_count,
+            "failed": failed_count,
+            "pending": pending_count,
+            "captured_not_verified": captured_count,
+        }
+        emit("")
         emit(
-            f"[SUMMARY] manifest: "
-            f"passed={len(report['manifest']['passed'])} "
-            f"failed={len(report['manifest']['failed'])} "
-            f"pending={len(report['manifest']['pending'])}"
+            f"[SUMMARY] Passed {passed_count}/{executed_count} executed tests"
+            f" | Failed {failed_count} | Pending {pending_count}"
+            f" | Captured unverified {captured_count}"
         )
         emit(
-            f"[SUMMARY] cleanup: "
+            f"[SUMMARY] Cleanup: "
             f"safe={'PASS' if report['safety_cleanup']['safe'] else 'FAIL'} "
             f"abort={'PASS' if report['safety_cleanup']['abort'] else 'FAIL'}"
         )
         if errors:
             for error in errors:
-                emit(f"[SUMMARY] error: {error}")
-        emit(f"[SUMMARY] overall: {report['result']}")
+                emit(f"[SUMMARY] Error: {error}")
+        emit(f"[SUMMARY] Overall: {report['result']}")
     return report
 
 
@@ -837,7 +881,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if devices else 2
 
         port = select_port(profile, args.port, args.verbose)
-        print(f"[START] {args.operation} on {port}", flush=True)
+        operation_name = (
+            "guided factory test"
+            if args.operation in {"guided-test", "led-check"}
+            else "factory self-test"
+        )
+        print(
+            f"[START] S5 Node-OTBR {operation_name} on {port}",
+            flush=True,
+        )
         handle, client = open_client(port, verbose=args.verbose)
         try:
             client.observe_ready()

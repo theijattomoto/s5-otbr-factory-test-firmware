@@ -88,7 +88,8 @@ python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001
 python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01
 ```
 
-Development runs show `[START]`, `[TEST]`, `[PASS]`, `[PARTIAL]`, `[FAIL]`,
+Development runs show `[START]`, `[TEST]`, `[MEASURE]`, `[PASS]`, `[PENDING]`,
+`[FAIL]`,
 and `[CLEANUP]` progress directly in the terminal. Add `--verbose` to print
 every transmitted and received protocol frame:
 
