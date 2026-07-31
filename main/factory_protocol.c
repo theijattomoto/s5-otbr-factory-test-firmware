@@ -18,7 +18,9 @@
 #include "factory_session.h"
 
 #define USB_RX_BUFFER_SIZE 1024
-#define USB_TX_BUFFER_SIZE 1024
+#define USB_TX_BUFFER_SIZE 4096
+#define USB_WRITE_CHUNK_SIZE 256
+#define USB_WRITE_TIMEOUT_MS 1000
 #define PROTOCOL_POLL_MS   20
 
 static factory_result_t usb_write_all(const char *text, size_t length)
@@ -29,9 +31,16 @@ static factory_result_t usb_write_all(const char *text, size_t length)
 
     size_t written = 0;
     while (written < length) {
+        size_t remaining = length - written;
+        size_t chunk = remaining < USB_WRITE_CHUNK_SIZE
+                           ? remaining
+                           : USB_WRITE_CHUNK_SIZE;
         const int result = usb_serial_jtag_write_bytes(
-            text + written, length - written, pdMS_TO_TICKS(100));
+            text + written, chunk, pdMS_TO_TICKS(USB_WRITE_TIMEOUT_MS));
         if (result <= 0) {
+            return FACTORY_ERR_TRANSPORT;
+        }
+        if ((size_t)result > chunk) {
             return FACTORY_ERR_TRANSPORT;
         }
         written += (size_t)result;

@@ -530,6 +530,9 @@ def main(argv: list[str] | None = None) -> int:
         output = args.output or default_report_path(report["unit_id"])
         write_report(report, output)
         print(f"{report['result']}: {output}")
+        if report["result"] == "FAIL":
+            for error in report["errors"]:
+                print(f"  - {error}", file=sys.stderr)
         return 0 if report["result"] == "PARTIAL" else 1
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

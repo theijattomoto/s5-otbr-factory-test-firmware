@@ -95,6 +95,7 @@ USB protocol envelope, product/board/firmware/protocol identity, ESP32-C6
 target, 4 MB flash, base MAC, IEEE 802.15.4 EUI-64, traceable session, and
 manifest state. GPS, EG912, rail, GPIO, ADC, PWM, and ZCD tests remain pending.
 Every run finishes with `safe` and `session.abort`, including failed runs.
+Failure reasons are printed immediately and retained in the JSON report.
 
 Run the station-runner unit tests without hardware:
 

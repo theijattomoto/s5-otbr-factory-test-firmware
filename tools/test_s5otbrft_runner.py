@@ -160,6 +160,26 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(profile["production_release"])
         self.assertRegex(digest, r"^[0-9A-F]{64}$")
 
+    def test_failure_errors_are_available_to_cli(self) -> None:
+        profile, profile_hash = load_profile(DEFAULT_PROFILE)
+
+        class MissingManifestSerial(FakeSerial):
+            def _response(
+                self, request: dict[str, Any]
+            ) -> dict[str, Any]:
+                response = super()._response(request)
+                if request["cmd"] == "session.list":
+                    response["data"] = {"tests": []}
+                return response
+
+        report = run_partial_self_test(
+            S5OTBRFTClient(MissingManifestSerial(), "FAKE"),
+            profile,
+            profile_hash,
+        )
+        self.assertEqual(report["result"], "FAIL")
+        self.assertTrue(report["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()
