@@ -1,0 +1,17 @@
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Factory firmware is replaced after PCB validation. OTA partitions are not
+# needed in this application.
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+
+# Deterministic fixture transport over the ESP32-C6 native USB Serial/JTAG
+# peripheral. GPIO12 and GPIO13 must never be configured as regular GPIOs.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Fixture software ignores non-prefixed boot text, but normal application logs
+# are still kept quiet and free of ANSI escape sequences.
+CONFIG_LOG_COLORS=n
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

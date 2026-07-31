@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "factory_identity.c"
+        "factory_manifest.c"
+        "factory_protocol.c"
+        "factory_request.c"
+        "factory_safety.c"
+        "factory_safety_esp.c"
+        "factory_session.c"
+        "factory_types.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_driver_gpio
+        esp_driver_usb_serial_jtag
+        esp_hw_support
+        esp_system
+        esp_timer
+        json
+        spi_flash
+)
