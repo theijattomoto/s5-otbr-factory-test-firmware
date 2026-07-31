@@ -21,17 +21,22 @@
 #define USB_TX_BUFFER_SIZE 1024
 #define PROTOCOL_POLL_MS   20
 
-static void usb_write_all(const char *text, size_t length)
+static factory_result_t usb_write_all(const char *text, size_t length)
 {
+    if (text == NULL) {
+        return FACTORY_ERR_INVALID_ARGUMENT;
+    }
+
     size_t written = 0;
     while (written < length) {
         const int result = usb_serial_jtag_write_bytes(
             text + written, length - written, pdMS_TO_TICKS(100));
         if (result <= 0) {
-            break;
+            return FACTORY_ERR_TRANSPORT;
         }
         written += (size_t)result;
     }
+    return FACTORY_OK;
 }
 
 static cJSON *response_data_create(void)
@@ -40,9 +45,10 @@ static cJSON *response_data_create(void)
     return data;
 }
 
-static void send_response(int32_t sequence, const char *command,
-                          factory_result_t result, const char *success_code,
-                          cJSON *data)
+static factory_result_t send_response(int32_t sequence, const char *command,
+                                      factory_result_t result,
+                                      const char *success_code,
+                                      cJSON *data)
 {
     cJSON *root = cJSON_CreateObject();
     if (data == NULL) {
@@ -58,8 +64,7 @@ static void send_response(int32_t sequence, const char *command,
             "\"code\":\"no_memory\",\"firmware\":\"0.1.0\","
             "\"protocol\":\"1.0\",\"product\":\"S5-NODE-OTBR\","
             "\"board\":\"TBD\",\"data\":{}}\n";
-        usb_write_all(fallback, sizeof(fallback) - 1);
-        return;
+        return usb_write_all(fallback, sizeof(fallback) - 1);
     }
 
     cJSON_AddNumberToObject(root, "seq", sequence);
@@ -78,14 +83,29 @@ static void send_response(int32_t sequence, const char *command,
     cJSON_AddItemToObject(root, "data", data);
 
     char *json = cJSON_PrintUnformatted(root);
-    if (json != NULL) {
+    if (json == NULL) {
+        cJSON_Delete(root);
+        static const char fallback[] =
+            FACTORY_PROTOCOL_PREFIX
+            "{\"seq\":0,\"cmd\":\"internal\",\"status\":\"error\","
+            "\"code\":\"no_memory\",\"firmware\":\"0.1.0\","
+            "\"protocol\":\"1.0\",\"product\":\"S5-NODE-OTBR\","
+            "\"board\":\"TBD\",\"data\":{}}\n";
+        return usb_write_all(fallback, sizeof(fallback) - 1);
+    }
+
+    factory_result_t write_result =
         usb_write_all(FACTORY_PROTOCOL_PREFIX,
                       sizeof(FACTORY_PROTOCOL_PREFIX) - 1);
-        usb_write_all(json, strlen(json));
-        usb_write_all("\n", 1);
-        cJSON_free(json);
+    if (write_result == FACTORY_OK) {
+        write_result = usb_write_all(json, strlen(json));
     }
+    if (write_result == FACTORY_OK) {
+        write_result = usb_write_all("\n", 1);
+    }
+    cJSON_free(json);
     cJSON_Delete(root);
+    return write_result;
 }
 
 static void add_identity(cJSON *data, const factory_identity_t *identity)
@@ -272,8 +292,20 @@ static void process_line(const char *line, size_t length)
 
     result = factory_apply_error_cleanup(result, factory_safety_apply);
 
-    send_response(request.seq, request.command_text, result, success_code,
-                  data);
+    const factory_result_t write_result =
+        send_response(request.seq, request.command_text, result, success_code,
+                      data);
+    if (write_result != FACTORY_OK) {
+        /*
+         * A response that was not completely handed to the transport cannot
+         * be trusted by the station. Restore outputs immediately and close an
+         * active session instead of waiting for the normal session timeout.
+         */
+        (void)factory_safety_apply();
+        if (factory_session_is_active()) {
+            (void)factory_session_abort();
+        }
+    }
 }
 
 static void send_ready(void)
@@ -288,7 +320,7 @@ static void send_ready(void)
                                 "unresolved_high_impedance");
         cJSON_AddBoolToObject(data, "production_release_capable", false);
     }
-    send_response(0, "ready", FACTORY_OK, "ok", data);
+    (void)send_response(0, "ready", FACTORY_OK, "ok", data);
 }
 
 factory_result_t factory_protocol_init(void)
@@ -325,18 +357,20 @@ void factory_protocol_run(void)
                 cJSON_AddBoolToObject(data, "outputs_safe",
                                       expiry == FACTORY_ERR_TIMEOUT);
             }
-            send_response(0, "session.timeout",
-                          expiry == FACTORY_ERR_TIMEOUT
-                              ? FACTORY_ERR_TIMEOUT : FACTORY_ERR_CLEANUP,
-                          NULL, data);
+            (void)send_response(
+                0, "session.timeout",
+                expiry == FACTORY_ERR_TIMEOUT
+                    ? FACTORY_ERR_TIMEOUT : FACTORY_ERR_CLEANUP,
+                NULL, data);
         }
 
         if (read != 1) continue;
 
         if (byte == '\n' || byte == '\r') {
             if (discard) {
-                send_response(0, "unknown", FACTORY_ERR_FRAME_TOO_LONG,
-                              NULL, response_data_create());
+                (void)send_response(0, "unknown",
+                                    FACTORY_ERR_FRAME_TOO_LONG,
+                                    NULL, response_data_create());
                 discard = false;
                 length = 0;
             } else if (length > 0) {

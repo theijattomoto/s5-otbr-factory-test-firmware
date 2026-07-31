@@ -17,6 +17,7 @@ const char *factory_result_code(factory_result_t result)
         case FACTORY_ERR_INCOMPLETE: return "incomplete_or_failed";
         case FACTORY_ERR_TIMEOUT: return "session_timeout";
         case FACTORY_ERR_CLEANUP: return "cleanup_failed";
+        case FACTORY_ERR_TRANSPORT: return "transport_error";
         case FACTORY_ERR_NO_MEMORY: return "no_memory";
         case FACTORY_ERR_HARDWARE: return "hardware_error";
         default: return "internal_error";

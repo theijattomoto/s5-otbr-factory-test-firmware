@@ -111,7 +111,8 @@ unresolved.
 `invalid_parameter`, `invalid_frame`, `invalid_json`, `invalid_request`,
 `frame_too_long`, `unknown_command`, `unknown_test`, `invalid_state`,
 `result_immutable`, `test_owner_mismatch`, `incomplete_or_failed`,
-`session_timeout`, `cleanup_failed`, `hardware_error`, and `no_memory`.
+`session_timeout`, `cleanup_failed`, `transport_error`, `hardware_error`, and
+`no_memory`.
 
 ## Provisional manifest
 

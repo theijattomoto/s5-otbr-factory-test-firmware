@@ -159,6 +159,8 @@ static bool test_session(void)
     CHECK(!factory_session_is_active());
 
     CHECK(factory_session_abort() == FACTORY_OK);
+    factory_session_snapshot(&snapshot);
+    CHECK(snapshot.state == FACTORY_SESSION_COMPLETED);
     CHECK(factory_session_abort() == FACTORY_OK);
 
     CHECK(factory_session_start("PCB-003", 1000) == FACTORY_OK);

@@ -27,6 +27,12 @@ requires approved fixture measurements or optical/current observation.
 GPIO latch readback during initialization confirms the ESP-IDF configuration,
 not the assembled electrical net.
 
+If safe initialization fails, the firmware logs the exact GPIO and ESP-IDF
+operation and enters a stable fail-stop state. It does not continuously reboot.
+The physical pad level is deliberately not used as proof that output
+configuration succeeded because assembled board circuitry can load the pad;
+the approved fixture remains authoritative.
+
 ## Phase 1 behavior
 
 The firmware sends and accepts one JSON object per line with the exact prefix:
