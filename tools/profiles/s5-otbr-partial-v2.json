@@ -1,13 +1,24 @@
 {
-  "profile_id": "s5-otbr-partial-v2",
+  "profile_id": "s5-otbr-electrical-v3",
   "production_release": false,
   "expected": {
     "product": "S5-NODE-OTBR",
     "board": "TBD",
-    "firmware": "0.2.0",
-    "protocol": "1.1",
+    "firmware": "0.3.0",
+    "protocol": "1.2",
     "target": "esp32c6",
     "flash_size_bytes": 4194304
+  },
+  "criteria": {
+    "wsen_who_am_i": 68,
+    "rail_3v3_min_v": 3.0,
+    "rail_3v3_max_v": 3.7,
+    "rail_5v_min_mv": 4750,
+    "rail_5v_max_mv": 5250,
+    "vrms_min_v": 220.0,
+    "vrms_max_v": 260.0,
+    "zcd_min_hz": 45.0,
+    "zcd_max_hz": 55.0
   },
   "required_passed_tests": [
     "device_identity",
@@ -15,6 +26,11 @@
     "base_mac",
     "thread_eui64",
     "firmware_identity",
+    "spi_wsen",
+    "gpio_spi_cs1",
+    "gpio_spi_sck",
+    "gpio_spi_mosi",
+    "gpio_spi_miso",
     "gps_uart_rx",
     "modem_uart",
     "modem_identity",

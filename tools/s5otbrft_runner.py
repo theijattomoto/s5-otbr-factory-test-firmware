@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -14,7 +15,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 PROTOCOL_PREFIX = "@S5OTBRFT "
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
+PWM_STEP_NOISE_TOLERANCE_A = 0.010
+PWM_MIN_TOTAL_RISE_A = 0.020
 DEFAULT_PROFILE = (
     Path(__file__).resolve().parent
     / "profiles"
@@ -49,6 +52,7 @@ def load_profile(path: Path) -> tuple[dict[str, Any], str]:
         "profile_id",
         "production_release",
         "expected",
+        "criteria",
         "required_passed_tests",
         "required_pending_tests",
         "adc_samples",
@@ -301,14 +305,14 @@ def summarize_manifest(data: dict[str, Any]) -> dict[str, list[str]]:
 def validate_gps(response: dict[str, Any]) -> dict[str, Any]:
     data = require_ok(response, "gps.check")
     if data.get("nmea_received") is not True:
-        raise ValidationError("GPS did not receive a checksum-valid RMC sentence")
-    count = data.get("valid_rmc_sentences")
+        raise ValidationError("GPS did not receive a checksum-valid NMEA sentence")
+    count = data.get("valid_nmea_sentences")
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-        raise ValidationError("GPS response has no valid RMC sentence count")
+        raise ValidationError("GPS response has no valid NMEA sentence count")
     if not isinstance(data.get("sample"), str) or not data["sample"].startswith(
-        ("$GPRMC,", "$GNRMC,")
+        "$"
     ):
-        raise ValidationError("GPS response has no valid RMC sample")
+        raise ValidationError("GPS response has no valid NMEA sample")
     return data
 
 
@@ -330,9 +334,63 @@ def validate_adc(response: dict[str, Any], channel: str) -> dict[str, Any]:
         value = data.get(field)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValidationError(f"ADC {channel} has no numeric {field}")
-    if data.get("engineering_units_approved") is not False:
-        raise ValidationError("ADC snapshot incorrectly claims approved units")
+    if data.get("engineering_units_approved") is not True:
+        raise ValidationError("ADC response has no approved engineering units")
     return data
+
+
+def validate_wsen(
+    response: dict[str, Any], profile: dict[str, Any]
+) -> dict[str, Any]:
+    data = require_ok(response, "spi.sensor")
+    expected = profile["criteria"]["wsen_who_am_i"]
+    if data.get("who_am_i") != expected:
+        raise ValidationError(
+            f"WSEN identity expected 0x{expected:02X}, "
+            f"received {data.get('who_am_i')!r}"
+        )
+    for axis in ("x", "y", "z"):
+        value = data.get(axis)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValidationError(f"WSEN response has no numeric {axis}")
+    return data
+
+
+def prompt_float(
+    prompt: str,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> float:
+    while True:
+        try:
+            value = float(input_func(prompt).strip())
+        except (EOFError, ValueError):
+            output_func("Please enter a numeric value.")
+            continue
+        if math.isfinite(value):
+            return value
+        output_func("Please enter a finite numeric value.")
+
+
+def record_fixture(
+    client: S5OTBRFTClient,
+    test_id: str,
+    passed: bool,
+    detail: str,
+    value: float | None = None,
+    unit: str | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "test_id": test_id,
+        "pass": passed,
+        "detail": detail,
+    }
+    if value is not None:
+        fields["value"] = value
+    if unit is not None:
+        fields["unit"] = unit
+    require_ok(client.command("fixture.record", **fields),
+               f"fixture.record {test_id}")
 
 
 def prompt_yes_no(
@@ -377,6 +435,7 @@ def run_partial_self_test(
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
     progress: Callable[[str], None] | None = None,
+    sleep_func: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     guided = operator_id is not None
     if guided and re.fullmatch(r"[A-Za-z0-9_.-]{1,20}", operator_id) is None:
@@ -414,7 +473,12 @@ def run_partial_self_test(
         "test_results": {},
         "manifest": {"passed": [], "pending": [], "failed": []},
         "errors": errors,
-        "safety_cleanup": {"safe": False, "abort": False},
+        "safety_cleanup": {
+            "pwm_zero": False,
+            "lamp_ctrl_off": False,
+            "safe": False,
+            "abort": False,
+        },
         "raw_exchange": client.transcript,
     }
 
@@ -445,6 +509,50 @@ def run_partial_self_test(
         emit("[PASS] Factory session started")
 
         peripheral_failures = 0
+
+        if guided:
+            criteria = profile["criteria"]
+            begin_test(
+                "3.3 V rail with multimeter "
+                f"(allowed {criteria['rail_3v3_min_v']:.1f}-"
+                f"{criteria['rail_3v3_max_v']:.1f} V)"
+            )
+            measured_3v3 = prompt_float(
+                "Enter measured 3.3 V rail voltage: ",
+                input_func,
+                output_func,
+            )
+            rail_3v3_passed = (
+                criteria["rail_3v3_min_v"] <= measured_3v3 <=
+                criteria["rail_3v3_max_v"]
+            )
+            emit(
+                f"[{'PASS' if rail_3v3_passed else 'FAIL'}] "
+                f"3.3 V rail: {measured_3v3:.3f} V"
+            )
+            record_fixture(
+                client, "rail_3v3", rail_3v3_passed,
+                f"operator={operator_id};DMM", measured_3v3, "V"
+            )
+            if not rail_3v3_passed:
+                peripheral_failures += 1
+                errors.append("rail_3v3: measurement outside 3.0-3.7 V")
+
+        begin_test("WSEN SPI sensor")
+        try:
+            report["wsen"] = validate_wsen(
+                client.command("spi.sensor", timeout_s=5.0), profile
+            )
+            emit(
+                f"[PASS] WSEN SPI: "
+                f"WHO_AM_I=0x{report['wsen']['who_am_i']:02X}"
+            )
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            errors.append(f"spi.sensor: {exc}")
+            emit(f"[FAIL] WSEN SPI: {exc}")
 
         begin_test("GPS UART checksum-valid NMEA")
         gps_timeout_ms = int(profile["gps_timeout_ms"])
@@ -492,46 +600,259 @@ def run_partial_self_test(
             errors.append(f"modem.check: {exc}")
             emit(f"[FAIL] EG912: {exc}")
 
-        adc_display = {
-            "vrms": ("VRMS waveform", "VRMS"),
-            "irms": ("IRMS input", "IRMS"),
-            "dc5v": ("5 V monitor", "5 V monitor"),
-        }
-        for channel in ("vrms", "irms", "dc5v"):
-            test_name, measure_name = adc_display[channel]
-            begin_test(test_name)
-            try:
-                report["adc_snapshots"][channel] = validate_adc(
-                    client.command(
-                        "adc.sample",
-                        channel=channel,
-                        samples=int(profile["adc_samples"]),
-                    ),
-                    channel,
-                )
-                sample = report["adc_snapshots"][channel]
-                sample["verification_status"] = "CAPTURED_NOT_VERIFIED"
-                sample["electrical_verdict"] = None
-                report["test_results"][f"adc_{channel}"] = (
-                    "CAPTURED_NOT_VERIFIED"
-                )
-                emit(
-                    f"[MEASURE] {measure_name} raw ADC: "
-                    f"avg={sample['raw_average']} "
-                    f"min={sample['raw_min']} max={sample['raw_max']} "
-                    f"noise={sample['raw_noise']}"
-                )
-                emit(
-                    f"[PENDING] {measure_name} electrical verification: "
-                    "no approved stimulus, conversion, and limits"
-                )
-            except ProtocolError:
-                raise
-            except Exception as exc:
+        begin_test("VRMS waveform (allowed 220-260 VAC)")
+        try:
+            response = client.command(
+                "adc.waveform", channel="vrms", samples=1000,
+                sample_interval_us=50,
+            )
+            vrms = response.get("data", {})
+            report["adc_snapshots"]["vrms"] = vrms
+            measured_vrms = float(vrms.get("engineering_value"))
+            vrms_passed = vrms.get("within_range") is True
+            emit(
+                f"[{'PASS' if vrms_passed else 'FAIL'}] "
+                f"VRMS: {measured_vrms:.2f} VAC"
+            )
+            record_fixture(
+                client, "adc_vrms", vrms_passed,
+                f"waveform;samples=1000;operator={operator_id or 'AUTO'}",
+                measured_vrms, "VAC",
+            )
+            require_ok(response, "adc.waveform vrms")
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            errors.append(f"adc.waveform vrms: {exc}")
+            emit(f"[FAIL] VRMS waveform: {exc}")
+
+        begin_test("AC ZCD frequency (allowed 45-55 Hz)")
+        try:
+            response = client.command(
+                "zcd.capture", expected_hz=50, duration_ms=1000,
+                timeout_s=4.0,
+            )
+            zcd = response.get("data", {})
+            measured_hz = float(zcd.get("frequency_hz", 0.0))
+            zcd_passed = zcd.get("within_tolerance") is True
+            emit(
+                f"[{'PASS' if zcd_passed else 'FAIL'}] AC ZCD captured: "
+                f"{measured_hz:.2f} Hz, edges={zcd.get('edges', 0)}"
+            )
+            record_fixture(
+                client, "zcd_50hz", zcd_passed,
+                f"capture;operator={operator_id or 'AUTO'}",
+                measured_hz, "Hz",
+            )
+            record_fixture(
+                client, "zcd_gpio", zcd.get("edges", 0) > 0,
+                "transitions observed",
+            )
+            require_ok(response, "zcd.capture 50 Hz")
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            errors.append(f"zcd.capture 50 Hz: {exc}")
+            emit(f"[FAIL] AC ZCD: {exc}")
+
+        if guided:
+            begin_test("LAMP_CTRL + IRMS functional test")
+            authorized = prompt_yes_no(
+                "Approved isolated load is connected and safe to energize? "
+                "[Y/N] ", input_func, output_func
+            )
+            if not authorized:
                 peripheral_failures += 1
-                report["test_results"][f"adc_{channel}"] = "FAIL"
-                errors.append(f"adc.sample {channel}: {exc}")
-                emit(f"[FAIL] ADC {channel}: {exc}")
+                errors.append("lamp current test: not authorized by operator")
+                emit("[FAIL] Lamp current test not authorized")
+            else:
+                observations: dict[str, float] = {}
+
+                def capture_irms(label: str) -> float:
+                    begin_test(f"IRMS {label}")
+                    irms_response = client.command(
+                        "adc.waveform", channel="irms", mode="observe",
+                        samples=1000, sample_interval_us=50,
+                    )
+                    irms_data = require_ok(
+                        irms_response, f"adc.waveform irms {label}"
+                    )
+                    current = float(irms_data["engineering_value"])
+                    emit(f"[MEASURE] IRMS {label}: {current:.4f} A")
+                    return current
+
+                try:
+                    begin_test("Set LAMP_CTRL OFF")
+                    require_ok(
+                        client.command(
+                            "gpio.write", name="lamp_ctrl", level=1
+                        ), "LAMP_CTRL OFF"
+                    )
+                    emit("[PASS] LAMP_CTRL commanded OFF")
+                    sleep_func(0.5)
+                    observations["off_before"] = capture_irms(
+                        "OFF before load"
+                    )
+                    begin_test(
+                        "Keep LAMP_CTRL OFF for 5.0 seconds before ON"
+                    )
+                    sleep_func(5.0)
+                    begin_test("Set LAMP_CTRL ON")
+                    require_ok(
+                        client.command(
+                            "gpio.write", name="lamp_ctrl", level=0
+                        ), "LAMP_CTRL ON"
+                    )
+                    begin_test("Load ON; settling for 10.0 seconds")
+                    sleep_func(10.0)
+                    observations["on"] = capture_irms("ON with load")
+                finally:
+                    emit("[SAFE] Set LAMP_CTRL OFF")
+                    best_effort_command(
+                        client, "gpio.write", errors,
+                        name="lamp_ctrl", level=1
+                    )
+                sleep_func(0.5)
+                observations["off_after"] = capture_irms("OFF after load")
+                off1 = observations["off_before"]
+                on = observations["on"]
+                off2 = observations["off_after"]
+                baseline = (off1 + off2) / 2.0
+                lamp_passed = (
+                    abs(off1 - off2) <= 0.002 and
+                    on - baseline >= 0.002 and on <= 1.000
+                )
+                begin_test(
+                    f"Current transition: OFF {off1:.4f} A -> "
+                    f"ON {on:.4f} A -> OFF {off2:.4f} A"
+                )
+                emit(
+                    f"[{'PASS' if lamp_passed else 'FAIL'}] "
+                    "LAMP_CTRL baseline/current-response verification"
+                )
+                detail = (
+                    f"op={operator_id};off1={off1:.4f};"
+                    f"on={on:.4f};off2={off2:.4f}"
+                )
+                record_fixture(
+                    client, "adc_irms", lamp_passed, detail, on, "A"
+                )
+                record_fixture(
+                    client, "gpio_lamp_ctrl", lamp_passed, detail
+                )
+                if not lamp_passed:
+                    peripheral_failures += 1
+                    errors.append(
+                        "lamp current test: OFF-ON-OFF criteria failed"
+                    )
+
+                begin_test("PWM current sweep: 0% to 100% in 10% steps")
+                points: list[float] = []
+                try:
+                    require_ok(
+                        client.command("pwm.set", duty_percent=100),
+                        "PWM zero brightness",
+                    )
+                    require_ok(
+                        client.command(
+                            "gpio.write", name="lamp_ctrl", level=0
+                        ), "LAMP_CTRL ON for PWM"
+                    )
+                    for brightness in range(0, 101, 10):
+                        duty = 100 - brightness
+                        begin_test(
+                            f"Brightness {brightness}% "
+                            f"(hardware PWM duty {duty}%)"
+                        )
+                        require_ok(
+                            client.command(
+                                "pwm.set", duty_percent=duty
+                            ), f"PWM {duty}%"
+                        )
+                        sleep_func(10.0)
+                        value = capture_irms(
+                            f"at brightness {brightness}%"
+                        )
+                        points.append(value)
+                        emit(
+                            f"[MEASURE] Brightness {brightness:3d}% / "
+                            f"duty {duty:3d}%: {value:.4f} A"
+                        )
+                finally:
+                    emit(
+                        "[SAFE] Brightness 0% (PWM duty 100%) "
+                        "and LAMP_CTRL OFF"
+                    )
+                    best_effort_command(
+                        client, "pwm.set", errors, duty_percent=100
+                    )
+                    best_effort_command(
+                        client, "gpio.write", errors,
+                        name="lamp_ctrl", level=1
+                    )
+                pwm_passed = (
+                    len(points) == 11 and
+                    all(
+                        points[i] + PWM_STEP_NOISE_TOLERANCE_A >=
+                        points[i - 1]
+                        for i in range(1, len(points))
+                    ) and points[-1] - points[0] >= PWM_MIN_TOTAL_RISE_A
+                )
+                emit(
+                    "[TEST] PWM IRMS sequence: "
+                    + " -> ".join(f"{value:.4f}" for value in points)
+                    + " A"
+                )
+                emit(
+                    f"[{'PASS' if pwm_passed else 'FAIL'}] "
+                    "Current rises with brightness "
+                    f"(step noise allowance "
+                    f"{PWM_STEP_NOISE_TOLERANCE_A:.3f} A)"
+                )
+                record_fixture(
+                    client, "pwm", pwm_passed,
+                    f"op={operator_id};11-point IRMS sweep",
+                    points[-1] if points else 0.0, "A"
+                )
+                if not pwm_passed:
+                    peripheral_failures += 1
+                    errors.append("pwm current sweep: trend criteria failed")
+
+        try:
+            sample = validate_adc(
+                client.command(
+                    "adc.sample", channel="dc5v",
+                    samples=int(profile["adc_samples"]),
+                ), "dc5v"
+            )
+            report["adc_snapshots"]["dc5v"] = sample
+            measured_5v = float(sample["estimated_input_mv"]) / 1000.0
+            minimum = profile["criteria"]["rail_5v_min_mv"] / 1000.0
+            maximum = profile["criteria"]["rail_5v_max_mv"] / 1000.0
+            rail_5v_passed = minimum <= measured_5v <= maximum
+            emit(
+                f"[{'PASS' if rail_5v_passed else 'FAIL'}] "
+                f"5 V rail: {measured_5v:.3f} V"
+            )
+            record_fixture(
+                client, "rail_5v", rail_5v_passed,
+                "onboard calibrated ADC", measured_5v, "V"
+            )
+            record_fixture(
+                client, "adc_5v", rail_5v_passed,
+                "same calibrated ADC reading", measured_5v, "V"
+            )
+            if not rail_5v_passed:
+                peripheral_failures += 1
+                errors.append("rail_5v: measurement outside 4.75-5.25 V")
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            errors.append(f"adc.sample dc5v: {exc}")
+            emit(f"[FAIL] 5 V rail: {exc}")
 
         if guided:
             led_states = (
@@ -625,18 +946,16 @@ def run_partial_self_test(
             required_leds = {
                 led["test_id"] for led in profile["guided_led_tests"]
             }
-            missing_passed.extend(sorted(required_leds - passed))
-        missing_pending = sorted(
-            set(profile["required_pending_tests"]) - pending
-        )
+            required_guided = required_leds | {
+                "rail_3v3", "rail_5v", "gpio_lamp_ctrl",
+                "adc_vrms", "adc_irms", "adc_5v", "pwm",
+                "zcd_gpio", "zcd_50hz",
+            }
+            missing_passed.extend(sorted(required_guided - passed))
         manifest_problems: list[str] = []
         if missing_passed:
             manifest_problems.append(
                 "required tests not passed: " + ", ".join(missing_passed)
-            )
-        if missing_pending:
-            manifest_problems.append(
-                "expected tests not pending: " + ", ".join(missing_pending)
             )
         if report["manifest"]["failed"]:
             manifest_problems.append(
@@ -659,6 +978,12 @@ def run_partial_self_test(
         emit(f"[FAIL] {exc}")
     finally:
         emit("[SAFE] Restoring all outputs and aborting session")
+        report["safety_cleanup"]["pwm_zero"] = best_effort_command(
+            client, "pwm.set", errors, duty_percent=100
+        )
+        report["safety_cleanup"]["lamp_ctrl_off"] = best_effort_command(
+            client, "gpio.write", errors, name="lamp_ctrl", level=1
+        )
         report["safety_cleanup"]["safe"] = best_effort_command(
             client, "safe", errors
         )

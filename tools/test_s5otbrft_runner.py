@@ -25,6 +25,8 @@ class FakeSerial:
         self.writes: list[bytes] = []
         self.closed = False
         self.recorded_tests: set[str] = set()
+        self.pwm_duty = 100
+        self.lamp_on = False
 
     @property
     def in_waiting(self) -> int:
@@ -62,8 +64,8 @@ class FakeSerial:
             "cmd": request["cmd"],
             "status": "ok",
             "code": "ok",
-            "firmware": "0.2.0",
-            "protocol": "1.1",
+            "firmware": "0.3.0",
+            "protocol": "1.2",
             "product": "S5-NODE-OTBR",
             "board": "TBD",
             "data": data,
@@ -104,9 +106,50 @@ class FakeSerial:
                 "raw_min": 995,
                 "raw_max": 1005,
                 "raw_noise": 10,
-                "engineering_units_approved": False,
+                "adc_mv": 900,
+                "estimated_input_mv": 4995,
+                "engineering_units_approved": True,
+            }
+        elif command == "adc.waveform":
+            current = (
+                0.005
+                if not self.lamp_on
+                else 0.010 + (100 - self.pwm_duty) * 0.0004
+            )
+            data = {
+                "channel": request["channel"],
+                "samples": request["samples"],
+                "raw_mean": 2000.0,
+                "raw_rms": 450.0,
+                "raw_min": 1000,
+                "raw_max": 3000,
+                "peak_to_peak": 2000,
+                "clipped_samples": 0,
+                "sample_rate_hz": 20000.0,
+                "engineering_value": (
+                    240.0 if request["channel"] == "vrms" else current
+                ),
+                "within_range": True,
+            }
+        elif command == "spi.sensor":
+            data = {"who_am_i": 0x44, "x": 1, "y": 2, "z": 3}
+        elif command == "zcd.capture":
+            data = {
+                "expected_hz": 50,
+                "edges": 100,
+                "frequency_hz": 50.0,
+                "duration_ms": 1000.0,
+                "within_tolerance": True,
+            }
+        elif command == "pwm.set":
+            self.pwm_duty = request["duty_percent"]
+            data = {
+                "duty_percent": request["duty_percent"],
+                "frequency_hz": 1000,
             }
         elif command == "gpio.write":
+            if request["name"] == "lamp_ctrl":
+                self.lamp_on = request["level"] == 0
             data = {
                 "name": request["name"],
                 "gpio": 2 if request["name"] == "status_led" else 8,
@@ -123,6 +166,11 @@ class FakeSerial:
                 "base_mac",
                 "thread_eui64",
                 "firmware_identity",
+                "spi_wsen",
+                "gpio_spi_cs1",
+                "gpio_spi_sck",
+                "gpio_spi_mosi",
+                "gpio_spi_miso",
                 "gps_uart_rx",
                 "modem_uart",
                 "modem_identity",
@@ -135,6 +183,11 @@ class FakeSerial:
                 "base_mac",
                 "thread_eui64",
                 "firmware_identity",
+                "spi_wsen",
+                "gpio_spi_cs1",
+                "gpio_spi_sck",
+                "gpio_spi_mosi",
+                "gpio_spi_miso",
                 "gps_uart_rx",
                 "modem_uart",
                 "modem_identity",
@@ -144,7 +197,6 @@ class FakeSerial:
                 "gpio_lamp_ctrl",
                 "gpio_psw_en",
                 "gpio_modem_pwrkey",
-                "gpio_modem_reset",
                 "gpio_status_led",
                 "gpio_ctrl_led",
                 "adc_vrms",
@@ -185,11 +237,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(report["safety_cleanup"]["safe"])
         self.assertTrue(report["safety_cleanup"]["abort"])
         self.assertEqual(
-            report["test_results"]["adc_vrms"],
-            "CAPTURED_NOT_VERIFIED",
-        )
-        self.assertIsNone(
-            report["adc_snapshots"]["vrms"]["electrical_verdict"]
+            report["adc_snapshots"]["vrms"]["engineering_value"], 240.0
         )
         commands = [
             json.loads(
@@ -202,12 +250,20 @@ class RunnerTests(unittest.TestCase):
             [
                 "identity",
                 "session.start",
+                "spi.sensor",
                 "gps.check",
                 "modem.check",
+                "adc.waveform",
+                "fixture.record",
+                "zcd.capture",
+                "fixture.record",
+                "fixture.record",
                 "adc.sample",
-                "adc.sample",
-                "adc.sample",
+                "fixture.record",
+                "fixture.record",
                 "session.list",
+                "pwm.set",
+                "gpio.write",
                 "safe",
                 "session.abort",
             ],
@@ -234,8 +290,8 @@ class RunnerTests(unittest.TestCase):
             output,
         )
         self.assertIn("[TEST] VRMS waveform", output)
-        self.assertIn("[MEASURE] VRMS raw ADC:", output)
-        self.assertIn("[PENDING] VRMS electrical verification:", output)
+        self.assertIn("[PASS] VRMS: 240.00 VAC", output)
+        self.assertIn("[PASS] 5 V rail: 4.995 V", output)
         self.assertIn("[TEST] Review factory-test manifest", output)
         self.assertIn(
             "[SAFE] Restoring all outputs and aborting session", output
@@ -244,11 +300,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(
             report["summary"],
             {
-                "executed": 9,
-                "passed": 9,
+                "executed": 19,
+                "passed": 19,
                 "failed": 0,
-                "pending": 17,
-                "manifest_total": 26,
+                "pending": 11,
+                "manifest_total": 30,
             },
         )
 
@@ -301,7 +357,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["result"], "FAIL")
         self.assertEqual(report["test_results"]["gps"], "FAIL")
         self.assertIn("modem.check", commands)
-        self.assertEqual(commands.count("adc.sample"), 3)
+        self.assertEqual(commands.count("adc.sample"), 1)
         self.assertIn("session.list", commands)
         self.assertEqual(commands[-2:], ["safe", "session.abort"])
 
@@ -313,18 +369,30 @@ class RunnerTests(unittest.TestCase):
     def test_guided_led_sequence(self) -> None:
         profile, profile_hash = load_profile(DEFAULT_PROFILE)
         serial = FakeSerial()
-        answers = iter(["Y", "Y", "Y", "Y", "Y", "Y"])
+        answers = iter(["3.3", "Y", "Y", "Y", "Y", "Y", "Y", "Y"])
         report = run_partial_self_test(
             S5OTBRFTClient(serial, "FAKE"),
             profile,
             profile_hash,
             operator_id="OP-01",
             input_func=lambda _: next(answers),
+            sleep_func=lambda _: None,
         )
         self.assertEqual(report["result"], "PARTIAL")
-        self.assertEqual(
-            serial.recorded_tests,
-            {"gpio_status_led", "gpio_ctrl_led"},
+        self.assertTrue(
+            {
+                "rail_3v3",
+                "rail_5v",
+                "gpio_lamp_ctrl",
+                "gpio_status_led",
+                "gpio_ctrl_led",
+                "adc_vrms",
+                "adc_irms",
+                "adc_5v",
+                "pwm",
+                "zcd_gpio",
+                "zcd_50hz",
+            }.issubset(serial.recorded_tests)
         )
 
     def test_failure_errors_are_available_to_cli(self) -> None:

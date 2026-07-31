@@ -71,8 +71,8 @@ static factory_result_t send_response(int32_t sequence, const char *command,
         static const char fallback[] =
             FACTORY_PROTOCOL_PREFIX
             "{\"seq\":0,\"cmd\":\"internal\",\"status\":\"error\","
-            "\"code\":\"no_memory\",\"firmware\":\"0.2.0\","
-            "\"protocol\":\"1.1\",\"product\":\"S5-NODE-OTBR\","
+            "\"code\":\"no_memory\",\"firmware\":\"0.3.0\","
+            "\"protocol\":\"1.2\",\"product\":\"S5-NODE-OTBR\","
             "\"board\":\"TBD\",\"data\":{}}\n";
         return usb_write_all(fallback, sizeof(fallback) - 1);
     }
@@ -98,8 +98,8 @@ static factory_result_t send_response(int32_t sequence, const char *command,
         static const char fallback[] =
             FACTORY_PROTOCOL_PREFIX
             "{\"seq\":0,\"cmd\":\"internal\",\"status\":\"error\","
-            "\"code\":\"no_memory\",\"firmware\":\"0.2.0\","
-            "\"protocol\":\"1.1\",\"product\":\"S5-NODE-OTBR\","
+            "\"code\":\"no_memory\",\"firmware\":\"0.3.0\","
+            "\"protocol\":\"1.2\",\"product\":\"S5-NODE-OTBR\","
             "\"board\":\"TBD\",\"data\":{}}\n";
         return usb_write_all(fallback, sizeof(fallback) - 1);
     }
@@ -247,8 +247,89 @@ static factory_result_t handle_request(const factory_request_t *request,
         cJSON_AddNumberToObject(data, "raw_min", sample.raw_min);
         cJSON_AddNumberToObject(data, "raw_max", sample.raw_max);
         cJSON_AddNumberToObject(data, "raw_noise", sample.raw_noise);
-        cJSON_AddBoolToObject(data, "engineering_units_approved", false);
+        cJSON_AddNumberToObject(data, "adc_mv", sample.adc_mv);
+        cJSON_AddNumberToObject(data, "estimated_input_mv",
+                                sample.estimated_input_mv);
+        cJSON_AddBoolToObject(data, "engineering_units_approved", true);
         return FACTORY_OK;
+    }
+
+    if (request->command == FACTORY_COMMAND_ADC_WAVEFORM) {
+        factory_waveform_result_t waveform = {0};
+        result = factory_test_adc_waveform(
+            request->channel, request->mode, request->samples,
+            request->sample_interval_us, &waveform);
+        cJSON_AddStringToObject(data, "channel", request->channel);
+        cJSON_AddNumberToObject(data, "samples", waveform.samples);
+        cJSON_AddNumberToObject(data, "raw_mean", waveform.raw_mean);
+        cJSON_AddNumberToObject(data, "raw_rms", waveform.raw_rms);
+        cJSON_AddNumberToObject(data, "raw_min", waveform.raw_min);
+        cJSON_AddNumberToObject(data, "raw_max", waveform.raw_max);
+        cJSON_AddNumberToObject(data, "peak_to_peak",
+                                waveform.peak_to_peak);
+        cJSON_AddNumberToObject(data, "clipped_samples",
+                                waveform.clipped_samples);
+        cJSON_AddNumberToObject(data, "sample_rate_hz",
+                                waveform.sample_rate_hz);
+        cJSON_AddNumberToObject(data, "engineering_value",
+                                waveform.engineering_value);
+        cJSON_AddBoolToObject(data, "within_range",
+                              waveform.within_range);
+        if (result == FACTORY_OK) {
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
+    }
+
+    if (request->command == FACTORY_COMMAND_PWM_SET) {
+        result = factory_test_pwm_set(request->duty_percent);
+        if (result == FACTORY_OK) {
+            cJSON_AddNumberToObject(data, "duty_percent",
+                                    request->duty_percent);
+            cJSON_AddNumberToObject(data, "frequency_hz", 1000);
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
+    }
+
+    if (request->command == FACTORY_COMMAND_ZCD_CAPTURE) {
+        factory_zcd_result_t zcd = {0};
+        result = factory_test_zcd_capture(
+            request->duration_ms, request->expected_hz, &zcd);
+        cJSON_AddNumberToObject(data, "expected_hz",
+                                request->expected_hz);
+        cJSON_AddNumberToObject(data, "edges", zcd.edges);
+        cJSON_AddNumberToObject(data, "frequency_hz", zcd.frequency_hz);
+        cJSON_AddNumberToObject(data, "duration_ms", zcd.duration_ms);
+        cJSON_AddBoolToObject(data, "within_tolerance",
+                              zcd.within_tolerance);
+        if (result == FACTORY_OK) {
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
+    }
+
+    if (request->command == FACTORY_COMMAND_SPI_SENSOR) {
+        factory_wsen_result_t wsen = {0};
+        result = factory_test_wsen(&wsen);
+        static const char *const ids[] = {
+            "spi_wsen", "gpio_spi_cs1", "gpio_spi_sck",
+            "gpio_spi_mosi", "gpio_spi_miso",
+        };
+        for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
+            factory_result_t record = factory_manifest_record(
+                ids[i], FACTORY_TEST_AUTOMATIC, result == FACTORY_OK,
+                false, 0.0, NULL, "WSEN SPI transaction");
+            if (record != FACTORY_OK) return record;
+        }
+        cJSON_AddNumberToObject(data, "who_am_i", wsen.who_am_i);
+        cJSON_AddNumberToObject(data, "x", wsen.x);
+        cJSON_AddNumberToObject(data, "y", wsen.y);
+        cJSON_AddNumberToObject(data, "z", wsen.z);
+        if (result == FACTORY_OK) {
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
     }
 
     if (request->command == FACTORY_COMMAND_GPS_CHECK) {
@@ -257,8 +338,8 @@ static factory_result_t handle_request(const factory_request_t *request,
         factory_result_t record_result = factory_manifest_record(
             "gps_uart_rx", FACTORY_TEST_AUTOMATIC, result == FACTORY_OK,
             false, 0.0, NULL,
-            result == FACTORY_OK ? "checksum-valid RMC received"
-                                 : "no checksum-valid RMC received");
+            result == FACTORY_OK ? "checksum-valid NMEA received"
+                                 : "no checksum-valid NMEA received");
         if (record_result != FACTORY_OK) return record_result;
         cJSON_AddBoolToObject(data, "nmea_received", gps.nmea_received);
         cJSON_AddNumberToObject(data, "valid_nmea_sentences",

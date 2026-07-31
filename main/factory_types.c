@@ -20,6 +20,10 @@ const char *factory_result_code(factory_result_t result)
         case FACTORY_ERR_TRANSPORT: return "transport_error";
         case FACTORY_ERR_NO_MEMORY: return "no_memory";
         case FACTORY_ERR_HARDWARE: return "hardware_error";
+        case FACTORY_ERR_MEASUREMENT_RANGE:
+            return "measurement_out_of_range";
+        case FACTORY_ERR_FREQUENCY_RANGE:
+            return "frequency_out_of_range";
         default: return "internal_error";
     }
 }

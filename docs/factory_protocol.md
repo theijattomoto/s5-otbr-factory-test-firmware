@@ -24,14 +24,18 @@ oversized, or unknown input triggers `safe` before the error response.
 
 Implemented partial-test commands also include:
 
-- `gpio.write`: allow-listed `status_led` and `ctrl_led` outputs only.
-- `adc.sample`: raw `vrms`, `irms`, or `dc5v` snapshots using 1..1024 samples.
-- `gps.check`: checksum-valid `$GPRMC` or `$GNRMC` reception.
+- `gpio.write`: allow-listed `lamp_ctrl`, `status_led`, and `ctrl_led`.
+- `adc.sample`: calibrated `dc5v` measurement using 1..1024 samples.
+- `adc.waveform`: bias-independent VRMS/IRMS capture and S5 conversion.
+- `pwm.set`: 1 kHz inverted dimming duty in approved 10% steps.
+- `zcd.capture`: bounded 50/60 Hz transition capture.
+- `spi.sensor`: WSEN WHO_AM_I and XYZ sample on GPIO20–23.
+- `gps.check`: receipt of any checksum-valid NMEA sentence.
 - `modem.check`: bounded `AT`, `ATI`, and `AT+CPIN?` checks.
 
-No command exposes `PSW_EN`, lamp control, modem power/reset, mains, or Thread
-network operation. ADC responses explicitly state that engineering units are
-not approved.
+No command exposes `PSW_EN`, modem power/reset, or Thread network operation.
+Mains and lamp commands require the guided runner's explicit isolated-load
+authorization and always finish with safe output cleanup.
 
 ## Envelope
 
@@ -43,8 +47,8 @@ Every response includes:
   "cmd": "identity",
   "status": "ok",
   "code": "ok",
-  "firmware": "0.2.0",
-  "protocol": "1.1",
+  "firmware": "0.3.0",
+  "protocol": "1.2",
   "product": "S5-NODE-OTBR",
   "board": "TBD",
   "data": {}
@@ -122,8 +126,8 @@ unresolved.
 `invalid_parameter`, `invalid_frame`, `invalid_json`, `invalid_request`,
 `frame_too_long`, `unknown_command`, `unknown_test`, `invalid_state`,
 `result_immutable`, `test_owner_mismatch`, `incomplete_or_failed`,
-`session_timeout`, `cleanup_failed`, `transport_error`, `hardware_error`, and
-`no_memory`.
+`session_timeout`, `cleanup_failed`, `transport_error`, `hardware_error`,
+`measurement_out_of_range`, `frequency_out_of_range`, and `no_memory`.
 
 ## Provisional manifest
 
@@ -131,6 +135,7 @@ Automatic:
 
 ```text
 device_identity, usb_protocol, base_mac, thread_eui64, firmware_identity,
+spi_wsen, gpio_spi_cs1, gpio_spi_sck, gpio_spi_mosi, gpio_spi_miso,
 gps_uart_rx, modem_uart, modem_identity, sim_presence
 ```
 

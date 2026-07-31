@@ -24,6 +24,10 @@ typedef enum {
     FACTORY_COMMAND_SAFE,
     FACTORY_COMMAND_GPIO_WRITE,
     FACTORY_COMMAND_ADC_SAMPLE,
+    FACTORY_COMMAND_ADC_WAVEFORM,
+    FACTORY_COMMAND_PWM_SET,
+    FACTORY_COMMAND_ZCD_CAPTURE,
+    FACTORY_COMMAND_SPI_SENSOR,
     FACTORY_COMMAND_GPS_CHECK,
     FACTORY_COMMAND_MODEM_CHECK
 } factory_command_t;
@@ -43,6 +47,11 @@ typedef struct {
     char channel[FACTORY_NAME_MAX];
     int level;
     uint32_t samples;
+    uint32_t sample_interval_us;
+    uint32_t duration_ms;
+    int duty_percent;
+    int expected_hz;
+    char mode[FACTORY_NAME_MAX];
     uint32_t timeout_ms;
 } factory_request_t;
 

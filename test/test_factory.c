@@ -88,6 +88,24 @@ static bool test_protocol_validation(void)
                 "\"timeout_ms\":10000}", &request) == FACTORY_OK);
     CHECK(parse("@S5OTBRFT {\"seq\":7,\"cmd\":\"modem.check\","
                 "\"timeout_ms\":2000}", &request) == FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":10,\"cmd\":\"adc.waveform\","
+                "\"channel\":\"vrms\",\"samples\":1000,"
+                "\"sample_interval_us\":50}", &request) == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_ADC_WAVEFORM);
+    CHECK(request.sample_interval_us == 50);
+    CHECK(parse("@S5OTBRFT {\"seq\":11,\"cmd\":\"pwm.set\","
+                "\"duty_percent\":40}", &request) == FACTORY_OK);
+    CHECK(request.duty_percent == 40);
+    CHECK(parse("@S5OTBRFT {\"seq\":12,\"cmd\":\"zcd.capture\","
+                "\"expected_hz\":50,\"duration_ms\":1000}", &request)
+          == FACTORY_OK);
+    CHECK(request.expected_hz == 50 && request.duration_ms == 1000);
+    CHECK(parse("@S5OTBRFT {\"seq\":13,\"cmd\":\"spi.sensor\"}", &request)
+          == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_SPI_SENSOR);
+    CHECK(parse("@S5OTBRFT {\"seq\":14,\"cmd\":\"pwm.set\","
+                "\"duty_percent\":45}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
     CHECK(parse("@S5OTBRFT {\"seq\":8,\"cmd\":\"gpio.write\","
                 "\"name\":\"status_led\",\"level\":2}", &request)
           == FACTORY_ERR_INVALID_REQUEST);

@@ -101,26 +101,21 @@ python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --op
 connected. Without a unit ID, the runner derives an engineering identifier
 from the base MAC. Reports are written atomically under `reports/`.
 
-A successful run is always `PARTIAL`, never production PASS. It validates the
-USB protocol envelope, product/board/firmware/protocol identity, ESP32-C6
-target, 4 MB flash, base MAC, IEEE 802.15.4 EUI-64, checksum-valid GPS RMC
-reception, EG912 AT/model/SIM readiness, raw VRMS/IRMS/5 V ADC snapshots,
-traceable session, and manifest state.
+A successful run is always `PARTIAL`, never production PASS. The guided flow
+follows the S5-Node electrical profile: operator-measured 3.3 V, WSEN SPI,
+checksum-valid GPS NMEA, EG912 AT/model/SIM, 220–260 VAC VRMS, 45–55 Hz ZCD,
+authorized LAMP_CTRL OFF–ON–OFF IRMS response, inverted 11-point PWM/IRMS
+sweep, calibrated 5 V rail, LEDs, traceable session, and manifest state.
 
 `guided-test` adds active-low status and control LED OFF-ON-OFF observations.
 The operator answers only `Y` or `N`; the visual verdicts are recorded in the
 same JSON report. `led-check` is a compatibility alias.
 
-VRMS, IRMS, and 5 V ADC values are displayed as
-`CAPTURED_NOT_VERIFIED`, never PASS. With no approved AC/analog stimulus,
-these snapshots prove only that firmware obtained raw ADC samples. They do not
-prove AC presence, sensor continuity, calibration, accuracy, voltage, current,
-power, or metering performance. Their manifest entries remain pending.
-
-Rail acceptance, ADC engineering-unit calibration, lamp/modem power outputs,
-`PSW_EN`, PWM, ZCD frequency, mains, lamp load, and metering tests remain
-pending. Every run finishes with `safe` and `session.abort`, including failed
-runs.
+The VRMS and IRMS formulas, 5 V divider, thresholds, LAMP_CTRL criteria, and
+PWM trend rules intentionally match `s5-node-factory-test`. AC and lamp tests
+must only run with the approved isolated supply/load and a trained operator.
+Every run restores PWM and controlled outputs before `safe` and
+`session.abort`, including failed runs.
 
 Peripheral failures do not stop the remaining safe tests. The runner continues
 through GPS, modem, every ADC channel, guided LEDs, and manifest capture when
