@@ -111,6 +111,12 @@ traceable session, and manifest state.
 The operator answers only `Y` or `N`; the visual verdicts are recorded in the
 same JSON report. `led-check` is a compatibility alias.
 
+VRMS, IRMS, and 5 V ADC values are displayed as
+`CAPTURED_NOT_VERIFIED`, never PASS. With no approved AC/analog stimulus,
+these snapshots prove only that firmware obtained raw ADC samples. They do not
+prove AC presence, sensor continuity, calibration, accuracy, voltage, current,
+power, or metering performance. Their manifest entries remain pending.
+
 Rail acceptance, ADC engineering-unit calibration, lamp/modem power outputs,
 `PSW_EN`, PWM, ZCD frequency, mains, lamp load, and metering tests remain
 pending. Every run finishes with `safe` and `session.abort`, including failed

@@ -495,12 +495,16 @@ def run_partial_self_test(
                     ),
                     channel,
                 )
-                report["test_results"][f"adc_{channel}"] = "PASS"
                 sample = report["adc_snapshots"][channel]
+                sample["verification_status"] = "CAPTURED_NOT_VERIFIED"
+                sample["electrical_verdict"] = None
+                report["test_results"][f"adc_{channel}"] = (
+                    "CAPTURED_NOT_VERIFIED"
+                )
                 emit(
-                    f"[PASS] ADC {channel}: avg={sample['raw_average']} "
+                    f"[CAPTURED] ADC {channel}: avg={sample['raw_average']} "
                     f"min={sample['raw_min']} max={sample['raw_max']} "
-                    f"noise={sample['raw_noise']}"
+                    f"noise={sample['raw_noise']} — no electrical verdict"
                 )
             except ProtocolError:
                 raise

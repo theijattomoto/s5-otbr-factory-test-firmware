@@ -184,6 +184,13 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["unit_id"], "ENG-9888E0112233")
         self.assertTrue(report["safety_cleanup"]["safe"])
         self.assertTrue(report["safety_cleanup"]["abort"])
+        self.assertEqual(
+            report["test_results"]["adc_vrms"],
+            "CAPTURED_NOT_VERIFIED",
+        )
+        self.assertIsNone(
+            report["adc_snapshots"]["vrms"]["electrical_verdict"]
+        )
         commands = [
             json.loads(
                 raw.decode("utf-8").strip()[len(PROTOCOL_PREFIX) :]
