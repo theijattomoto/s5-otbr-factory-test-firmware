@@ -228,6 +228,37 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("[TX] @S5OTBRFT", text)
         self.assertIn("[RX] @S5OTBRFT", text)
 
+    def test_peripheral_failure_does_not_stop_remaining_tests(self) -> None:
+        class GpsFailureSerial(FakeSerial):
+            def _response(
+                self, request: dict[str, Any]
+            ) -> dict[str, Any]:
+                response = super()._response(request)
+                if request["cmd"] == "gps.check":
+                    response["status"] = "error"
+                    response["code"] = "session_timeout"
+                return response
+
+        profile, profile_hash = load_profile(DEFAULT_PROFILE)
+        serial = GpsFailureSerial()
+        report = run_partial_self_test(
+            S5OTBRFTClient(serial, "FAKE"),
+            profile,
+            profile_hash,
+        )
+        commands = [
+            json.loads(
+                raw.decode("utf-8").strip()[len(PROTOCOL_PREFIX) :]
+            )["cmd"]
+            for raw in serial.writes
+        ]
+        self.assertEqual(report["result"], "FAIL")
+        self.assertEqual(report["test_results"]["gps"], "FAIL")
+        self.assertIn("modem.check", commands)
+        self.assertEqual(commands.count("adc.sample"), 3)
+        self.assertIn("session.list", commands)
+        self.assertEqual(commands[-2:], ["safe", "session.abort"])
+
     def test_profile_is_nonproduction(self) -> None:
         profile, digest = load_profile(Path(DEFAULT_PROFILE))
         self.assertFalse(profile["production_release"])

@@ -407,6 +407,7 @@ def run_partial_self_test(
         "modem": None,
         "adc_snapshots": {},
         "leds": {},
+        "test_results": {},
         "manifest": {"passed": [], "pending": [], "failed": []},
         "errors": errors,
         "safety_cleanup": {"safe": False, "abort": False},
@@ -438,47 +439,76 @@ def run_partial_self_test(
         )
         emit("[PASS] Session started")
 
+        peripheral_failures = 0
+
         emit("[TEST] GPS UART and checksum-valid RMC reception")
         gps_timeout_ms = int(profile["gps_timeout_ms"])
-        report["gps"] = validate_gps(
-            client.command(
-                "gps.check",
-                timeout_s=(gps_timeout_ms / 1000.0) + 3.0,
-                timeout_ms=gps_timeout_ms,
+        try:
+            report["gps"] = validate_gps(
+                client.command(
+                    "gps.check",
+                    timeout_s=(gps_timeout_ms / 1000.0) + 3.0,
+                    timeout_ms=gps_timeout_ms,
+                )
             )
-        )
-        emit(
-            f"[PASS] GPS UART: "
-            f"{report['gps']['valid_rmc_sentences']} valid RMC"
-        )
+            report["test_results"]["gps"] = "PASS"
+            emit(
+                f"[PASS] GPS UART: "
+                f"{report['gps']['valid_rmc_sentences']} valid RMC"
+            )
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            report["test_results"]["gps"] = "FAIL"
+            errors.append(f"gps.check: {exc}")
+            emit(f"[FAIL] GPS UART: {exc}")
 
         emit("[TEST] EG912 UART, model identity and SIM readiness")
         modem_timeout_ms = int(profile["modem_timeout_ms"])
-        report["modem"] = validate_modem(
-            client.command(
-                "modem.check",
-                timeout_s=(modem_timeout_ms * 3 / 1000.0) + 3.0,
-                timeout_ms=modem_timeout_ms,
+        try:
+            report["modem"] = validate_modem(
+                client.command(
+                    "modem.check",
+                    timeout_s=(modem_timeout_ms * 3 / 1000.0) + 3.0,
+                    timeout_ms=modem_timeout_ms,
+                )
             )
-        )
-        emit(f"[PASS] EG912: {report['modem']['identity']}")
+            report["test_results"]["modem"] = "PASS"
+            emit(f"[PASS] EG912: {report['modem']['identity']}")
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            peripheral_failures += 1
+            report["test_results"]["modem"] = "FAIL"
+            errors.append(f"modem.check: {exc}")
+            emit(f"[FAIL] EG912: {exc}")
 
         for channel in ("vrms", "irms", "dc5v"):
             emit(f"[TEST] ADC snapshot: {channel}")
-            report["adc_snapshots"][channel] = validate_adc(
-                client.command(
-                    "adc.sample",
-                    channel=channel,
-                    samples=int(profile["adc_samples"]),
-                ),
-                channel,
-            )
-            sample = report["adc_snapshots"][channel]
-            emit(
-                f"[PASS] ADC {channel}: avg={sample['raw_average']} "
-                f"min={sample['raw_min']} max={sample['raw_max']} "
-                f"noise={sample['raw_noise']}"
-            )
+            try:
+                report["adc_snapshots"][channel] = validate_adc(
+                    client.command(
+                        "adc.sample",
+                        channel=channel,
+                        samples=int(profile["adc_samples"]),
+                    ),
+                    channel,
+                )
+                report["test_results"][f"adc_{channel}"] = "PASS"
+                sample = report["adc_snapshots"][channel]
+                emit(
+                    f"[PASS] ADC {channel}: avg={sample['raw_average']} "
+                    f"min={sample['raw_min']} max={sample['raw_max']} "
+                    f"noise={sample['raw_noise']}"
+                )
+            except ProtocolError:
+                raise
+            except Exception as exc:
+                peripheral_failures += 1
+                report["test_results"][f"adc_{channel}"] = "FAIL"
+                errors.append(f"adc.sample {channel}: {exc}")
+                emit(f"[FAIL] ADC {channel}: {exc}")
 
         if guided:
             led_states = (
@@ -492,55 +522,69 @@ def run_partial_self_test(
                 test_id = led["test_id"]
                 observations: list[dict[str, Any]] = []
                 report["leds"][command_name] = observations
-                passed = True
-                for level, expected in led_states:
-                    emit(f"[TEST] {display_name}: expected {expected}")
-                    data = require_ok(
-                        client.command(
-                            "gpio.write", name=command_name, level=level
-                        ),
-                        f"gpio.write {command_name}",
-                    )
-                    confirmed = prompt_yes_no(
-                        f"{display_name} should be {expected}. "
-                        f"Is it {expected}? [Y/N] ",
-                        input_func,
-                        output_func,
-                    )
-                    observations.append(
-                        {
-                            "timestamp_utc": utc_now(),
-                            "gpio": data.get("gpio"),
-                            "level": level,
-                            "expected_state": expected,
-                            "confirmed": confirmed,
-                        }
-                    )
-                    if not confirmed:
-                        passed = False
-                        break
-                    emit(f"[PASS] {display_name}: observed {expected}")
+                try:
+                    passed = True
+                    for level, expected in led_states:
+                        emit(f"[TEST] {display_name}: expected {expected}")
+                        data = require_ok(
+                            client.command(
+                                "gpio.write", name=command_name, level=level
+                            ),
+                            f"gpio.write {command_name}",
+                        )
+                        confirmed = prompt_yes_no(
+                            f"{display_name} should be {expected}. "
+                            f"Is it {expected}? [Y/N] ",
+                            input_func,
+                            output_func,
+                        )
+                        observations.append(
+                            {
+                                "timestamp_utc": utc_now(),
+                                "gpio": data.get("gpio"),
+                                "level": level,
+                                "expected_state": expected,
+                                "confirmed": confirmed,
+                            }
+                        )
+                        if not confirmed:
+                            passed = False
+                            break
+                        emit(f"[PASS] {display_name}: observed {expected}")
 
-                states = "".join(
-                    "Y" if observation["confirmed"] else "N"
-                    for observation in observations
-                )
-                require_ok(
-                    client.command(
-                        "fixture.record",
-                        test_id=test_id,
-                        **{"pass": passed},
-                        detail=(
-                            f"method=operator_visual;op={operator_id};"
-                            f"states={states}"
-                        ),
-                    ),
-                    f"fixture.record {test_id}",
-                )
-                if not passed:
-                    raise ValidationError(
-                        f"{display_name} did not match the expected state"
+                    states = "".join(
+                        "Y" if observation["confirmed"] else "N"
+                        for observation in observations
                     )
+                    require_ok(
+                        client.command(
+                            "fixture.record",
+                            test_id=test_id,
+                            **{"pass": passed},
+                            detail=(
+                                f"method=operator_visual;op={operator_id};"
+                                f"states={states}"
+                            ),
+                        ),
+                        f"fixture.record {test_id}",
+                    )
+                    report["test_results"][test_id] = (
+                        "PASS" if passed else "FAIL"
+                    )
+                    if not passed:
+                        peripheral_failures += 1
+                        message = (
+                            f"{display_name} did not match the expected state"
+                        )
+                        errors.append(f"{test_id}: {message}")
+                        emit(f"[FAIL] {message}")
+                except ProtocolError:
+                    raise
+                except Exception as exc:
+                    peripheral_failures += 1
+                    report["test_results"][test_id] = "FAIL"
+                    errors.append(f"{test_id}: {exc}")
+                    emit(f"[FAIL] {display_name}: {exc}")
 
         emit("[TEST] Capture and validate manifest")
         manifest_data = require_ok(
@@ -561,27 +605,29 @@ def run_partial_self_test(
         missing_pending = sorted(
             set(profile["required_pending_tests"]) - pending
         )
+        manifest_problems: list[str] = []
         if missing_passed:
-            raise ValidationError(
-                "Required automatic tests not passed: "
-                + ", ".join(missing_passed)
+            manifest_problems.append(
+                "required tests not passed: " + ", ".join(missing_passed)
             )
         if missing_pending:
-            raise ValidationError(
-                "Expected future tests are not pending: "
-                + ", ".join(missing_pending)
+            manifest_problems.append(
+                "expected tests not pending: " + ", ".join(missing_pending)
             )
         if report["manifest"]["failed"]:
-            raise ValidationError(
-                "Manifest contains failures: "
+            manifest_problems.append(
+                "manifest failures: "
                 + ", ".join(report["manifest"]["failed"])
             )
         if not report["manifest"]["pending"]:
-            raise ValidationError("Partial run must retain pending tests")
-        report["result"] = "PARTIAL"
-        emit(
-            f"[PARTIAL] passed={len(report['manifest']['passed'])} "
-            f"pending={len(report['manifest']['pending'])} failed=0"
+            manifest_problems.append("partial run has no pending tests")
+        if manifest_problems:
+            errors.extend(f"manifest: {problem}" for problem in manifest_problems)
+
+        report["result"] = (
+            "FAIL"
+            if peripheral_failures or manifest_problems
+            else "PARTIAL"
         )
     except Exception as exc:
         errors.append(str(exc))
@@ -610,6 +656,24 @@ def run_partial_self_test(
             report["result"] = "FAIL"
         report["ended_utc"] = utc_now()
         report["raw_exchange"] = list(client.transcript)
+        emit("[SUMMARY] --------------------------------------------------")
+        for name, status in report["test_results"].items():
+            emit(f"[SUMMARY] {name}: {status}")
+        emit(
+            f"[SUMMARY] manifest: "
+            f"passed={len(report['manifest']['passed'])} "
+            f"failed={len(report['manifest']['failed'])} "
+            f"pending={len(report['manifest']['pending'])}"
+        )
+        emit(
+            f"[SUMMARY] cleanup: "
+            f"safe={'PASS' if report['safety_cleanup']['safe'] else 'FAIL'} "
+            f"abort={'PASS' if report['safety_cleanup']['abort'] else 'FAIL'}"
+        )
+        if errors:
+            for error in errors:
+                emit(f"[SUMMARY] error: {error}")
+        emit(f"[SUMMARY] overall: {report['result']}")
     return report
 
 
@@ -790,7 +854,8 @@ def main(argv: list[str] | None = None) -> int:
 
         output = args.output or default_report_path(report["unit_id"])
         write_report(report, output)
-        print(f"{report['result']}: {output}")
+        print(f"[SUMMARY] report: {output}", flush=True)
+        print(f"[RESULT] {report['result']}", flush=True)
         if report["result"] == "FAIL":
             for error in report["errors"]:
                 print(f"  - {error}", file=sys.stderr)

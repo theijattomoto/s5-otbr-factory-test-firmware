@@ -115,6 +115,13 @@ Rail acceptance, ADC engineering-unit calibration, lamp/modem power outputs,
 `PSW_EN`, PWM, ZCD frequency, mains, lamp load, and metering tests remain
 pending. Every run finishes with `safe` and `session.abort`, including failed
 runs.
+
+Peripheral failures do not stop the remaining safe tests. The runner continues
+through GPS, modem, every ADC channel, guided LEDs, and manifest capture when
+the serial protocol remains trustworthy. A framing, sequence, or transport
+failure stops active testing. Each run ends with a consolidated terminal
+summary containing individual test results, manifest counts, cleanup status,
+errors, overall result, and JSON report path.
 Failure reasons are printed immediately and retained in the JSON report.
 
 Run the station-runner unit tests without hardware:
