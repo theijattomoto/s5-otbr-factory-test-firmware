@@ -89,8 +89,7 @@ python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --op
 ```
 
 Development runs show `[START]`, `[TEST]`, `[MEASURE]`, `[PASS]`, `[PENDING]`,
-`[FAIL]`,
-and `[CLEANUP]` progress directly in the terminal. Add `--verbose` to print
+`[FAIL]`, and `[SAFE]` progress directly in the terminal. Add `--verbose` to print
 every transmitted and received protocol frame:
 
 ```powershell
@@ -127,9 +126,9 @@ Peripheral failures do not stop the remaining safe tests. The runner continues
 through GPS, modem, every ADC channel, guided LEDs, and manifest capture when
 the serial protocol remains trustworthy. A framing, sequence, or transport
 failure stops active testing. Each run ends with a consolidated terminal
-summary containing individual test results, manifest counts, cleanup status,
-errors, overall result, and JSON report path.
-Failure reasons are printed immediately and retained in the JSON report.
+result and JSON report path, failure reasons, failed and pending manifest test
+IDs, and one final S5-Node-style manifest summary. Failure reasons are also
+retained in the JSON report.
 
 Run the station-runner unit tests without hardware:
 

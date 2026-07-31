@@ -388,7 +388,6 @@ def run_partial_self_test(
     emit = progress if progress is not None else (lambda _: None)
 
     def begin_test(name: str) -> None:
-        emit("")
         emit(f"[TEST] {name}")
 
     report: dict[str, Any] = {
@@ -420,7 +419,7 @@ def run_partial_self_test(
     }
 
     try:
-        begin_test("Device identity")
+        begin_test("Device identity and USB protocol")
         identity_response = client.command("identity")
         identity = validate_identity(identity_response, profile)
         report["identity"] = {
@@ -434,26 +433,20 @@ def run_partial_self_test(
         report["unit_id"] = unit_id
         report["test_results"]["device_identity"] = "PASS"
         emit(
-            f"[PASS] Device identity: {identity_response['product']} "
-            f"{identity_response['board']}, firmware "
-            f"{identity_response['firmware']}, protocol "
-            f"{identity_response['protocol']}"
-        )
-        emit(
-            f"[MEASURE] Base MAC: {identity['base_mac']} | "
-            f"EUI-64: {identity['thread_eui64']}"
+            f"[PASS] Identity: {identity['base_mac']} / "
+            f"{identity['thread_eui64']}"
         )
 
-        begin_test("Start factory session")
+        begin_test(f"Start session for {unit_id}")
         require_ok(
             client.command("session.start", unit_id=unit_id),
             "session.start",
         )
-        emit(f"[PASS] Session started: {unit_id}")
+        emit("[PASS] Factory session started")
 
         peripheral_failures = 0
 
-        begin_test("GPS UART")
+        begin_test("GPS UART checksum-valid NMEA")
         gps_timeout_ms = int(profile["gps_timeout_ms"])
         try:
             report["gps"] = validate_gps(
@@ -465,11 +458,9 @@ def run_partial_self_test(
             )
             report["test_results"]["gps"] = "PASS"
             emit(
-                f"[MEASURE] GPS: "
-                f"{report['gps'].get('valid_nmea_sentences', 0)} valid NMEA | "
-                f"{report['gps']['valid_rmc_sentences']} valid RMC"
+                f"[PASS] GPS UART: "
+                f"{report['gps'].get('valid_nmea_sentences', 0)} valid NMEA"
             )
-            emit("[PASS] GPS UART")
         except ProtocolError:
             raise
         except Exception as exc:
@@ -489,8 +480,10 @@ def run_partial_self_test(
                 )
             )
             report["test_results"]["modem"] = "PASS"
-            emit(f"[MEASURE] EG912 identity: {report['modem']['identity']}")
-            emit("[PASS] EG912 modem UART and SIM")
+            emit(
+                f"[PASS] EG912 modem UART and SIM: "
+                f"{report['modem']['identity']}"
+            )
         except ProtocolError:
             raise
         except Exception as exc:
@@ -554,8 +547,8 @@ def run_partial_self_test(
                 report["leds"][command_name] = observations
                 try:
                     passed = True
+                    begin_test(f"{display_name} OFF-ON-OFF visual check")
                     for level, expected in led_states:
-                        begin_test(f"{display_name}: expected {expected}")
                         data = require_ok(
                             client.command(
                                 "gpio.write", name=command_name, level=level
@@ -580,7 +573,6 @@ def run_partial_self_test(
                         if not confirmed:
                             passed = False
                             break
-                        emit(f"[PASS] {display_name}: observed {expected}")
 
                     states = "".join(
                         "Y" if observation["confirmed"] else "N"
@@ -608,6 +600,8 @@ def run_partial_self_test(
                         )
                         errors.append(f"{test_id}: {message}")
                         emit(f"[FAIL] {message}")
+                    else:
+                        emit(f"[PASS] {display_name} visual check")
                 except ProtocolError:
                     raise
                 except Exception as exc:
@@ -616,18 +610,11 @@ def run_partial_self_test(
                     errors.append(f"{test_id}: {exc}")
                     emit(f"[FAIL] {display_name}: {exc}")
 
-        begin_test("Read final manifest")
+        begin_test("Review factory-test manifest")
         manifest_data = require_ok(
             client.command("session.list"), "session.list"
         )
         report["manifest"] = summarize_manifest(manifest_data)
-        emit(
-            f"[MEASURE] Manifest: "
-            f"passed={len(report['manifest']['passed'])} "
-            f"failed={len(report['manifest']['failed'])} "
-            f"pending={len(report['manifest']['pending'])}"
-        )
-        emit("[PASS] Final manifest read")
 
         passed = set(report["manifest"]["passed"])
         pending = set(report["manifest"]["pending"])
@@ -671,57 +658,29 @@ def run_partial_self_test(
         report["result"] = "FAIL"
         emit(f"[FAIL] {exc}")
     finally:
-        emit("")
-        emit("[CLEANUP] Restore safe outputs")
+        emit("[SAFE] Restoring all outputs and aborting session")
         report["safety_cleanup"]["safe"] = best_effort_command(
             client, "safe", errors
         )
-        emit(
-            "[PASS] Safe state restored"
-            if report["safety_cleanup"]["safe"]
-            else "[FAIL] Safe-state command failed"
-        )
-        emit("[CLEANUP] Abort partial session")
         report["safety_cleanup"]["abort"] = best_effort_command(
             client, "session.abort", errors
-        )
-        emit(
-            "[PASS] Session aborted"
-            if report["safety_cleanup"]["abort"]
-            else "[FAIL] Session abort failed"
         )
         if not all(report["safety_cleanup"].values()):
             report["result"] = "FAIL"
         report["ended_utc"] = utc_now()
         report["raw_exchange"] = list(client.transcript)
-        statuses = list(report["test_results"].values())
-        passed_count = statuses.count("PASS")
-        failed_count = statuses.count("FAIL")
+        passed_count = len(report["manifest"]["passed"])
+        failed_count = len(report["manifest"]["failed"])
         executed_count = passed_count + failed_count
-        captured_count = statuses.count("CAPTURED_NOT_VERIFIED")
         pending_count = len(report["manifest"]["pending"])
+        manifest_total = executed_count + pending_count
         report["summary"] = {
             "executed": executed_count,
             "passed": passed_count,
             "failed": failed_count,
             "pending": pending_count,
-            "captured_not_verified": captured_count,
+            "manifest_total": manifest_total,
         }
-        emit("")
-        emit(
-            f"[SUMMARY] Passed {passed_count}/{executed_count} executed tests"
-            f" | Failed {failed_count} | Pending {pending_count}"
-            f" | Captured unverified {captured_count}"
-        )
-        emit(
-            f"[SUMMARY] Cleanup: "
-            f"safe={'PASS' if report['safety_cleanup']['safe'] else 'FAIL'} "
-            f"abort={'PASS' if report['safety_cleanup']['abort'] else 'FAIL'}"
-        )
-        if errors:
-            for error in errors:
-                emit(f"[SUMMARY] Error: {error}")
-        emit(f"[SUMMARY] Overall: {report['result']}")
     return report
 
 
@@ -882,14 +841,11 @@ def main(argv: list[str] | None = None) -> int:
 
         port = select_port(profile, args.port, args.verbose)
         operation_name = (
-            "guided factory test"
+            "Guided factory test"
             if args.operation in {"guided-test", "led-check"}
-            else "factory self-test"
+            else "Factory self-test"
         )
-        print(
-            f"[START] S5 Node-OTBR {operation_name} on {port}",
-            flush=True,
-        )
+        print(f"[START] {operation_name} on {port}", flush=True)
         handle, client = open_client(port, verbose=args.verbose)
         try:
             client.observe_ready()
@@ -910,11 +866,32 @@ def main(argv: list[str] | None = None) -> int:
 
         output = args.output or default_report_path(report["unit_id"])
         write_report(report, output)
-        print(f"[SUMMARY] report: {output}", flush=True)
-        print(f"[RESULT] {report['result']}", flush=True)
+        print(f"{report['result']}: {output}", flush=True)
         if report["result"] == "FAIL":
+            print("Failure reasons:", flush=True)
             for error in report["errors"]:
-                print(f"  - {error}", file=sys.stderr)
+                print(f"  - {error}", flush=True)
+        if report["manifest"]["failed"]:
+            print(
+                "Failed tests: "
+                + ", ".join(report["manifest"]["failed"]),
+                flush=True,
+            )
+        if report["manifest"]["pending"]:
+            print(
+                "Pending tests: "
+                + ", ".join(report["manifest"]["pending"]),
+                flush=True,
+            )
+        summary = report["summary"]
+        print(
+            f"[SUMMARY] Passed {summary['passed']}/"
+            f"{summary['executed']} executed tests"
+            f" | Failed {summary['failed']}"
+            f" | Pending {summary['pending']}"
+            f" | Manifest total {summary['manifest_total']}",
+            flush=True,
+        )
         return 0 if report["result"] == "PARTIAL" else 1
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

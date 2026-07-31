@@ -227,20 +227,29 @@ class RunnerTests(unittest.TestCase):
 
         output = "\n".join(messages)
         self.assertEqual(report["result"], "PARTIAL")
-        self.assertIn("[TEST] Device identity", output)
+        self.assertIn("[TEST] Device identity and USB protocol", output)
         self.assertIn(
-            "[PASS] Device identity: S5-NODE-OTBR TBD, firmware 0.2.0",
+            "[PASS] Identity: 98:88:E0:11:22:33 / "
+            "98:88:E0:FF:FE:11:22:33",
             output,
         )
         self.assertIn("[TEST] VRMS waveform", output)
         self.assertIn("[MEASURE] VRMS raw ADC:", output)
         self.assertIn("[PENDING] VRMS electrical verification:", output)
-        self.assertIn("[TEST] Read final manifest", output)
-        self.assertRegex(
-            output,
-            r"\[SUMMARY\] Passed \d+/\d+ executed tests"
-            r" \| Failed \d+ \| Pending \d+"
-            r" \| Captured unverified 3",
+        self.assertIn("[TEST] Review factory-test manifest", output)
+        self.assertIn(
+            "[SAFE] Restoring all outputs and aborting session", output
+        )
+        self.assertNotIn("[SUMMARY]", output)
+        self.assertEqual(
+            report["summary"],
+            {
+                "executed": 9,
+                "passed": 9,
+                "failed": 0,
+                "pending": 17,
+                "manifest_total": 26,
+            },
         )
 
     def test_sequence_mismatch_is_rejected(self) -> None:
