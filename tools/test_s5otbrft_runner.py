@@ -22,6 +22,7 @@ class FakeSerial:
         self.rx = bytearray()
         self.writes: list[bytes] = []
         self.closed = False
+        self.recorded_tests: set[str] = set()
 
     @property
     def in_waiting(self) -> int:
@@ -59,8 +60,8 @@ class FakeSerial:
             "cmd": request["cmd"],
             "status": "ok",
             "code": "ok",
-            "firmware": "0.1.0",
-            "protocol": "1.0",
+            "firmware": "0.2.0",
+            "protocol": "1.1",
             "product": "S5-NODE-OTBR",
             "board": "TBD",
             "data": data,
@@ -78,6 +79,41 @@ class FakeSerial:
                 "thread_eui64": "98:88:E0:FF:FE:11:22:33",
                 "reset_reason": 1,
             }
+        elif command == "gps.check":
+            data = {
+                "nmea_received": True,
+                "valid_nmea_sentences": 1,
+                "valid_rmc_sentences": 1,
+                "sample": "$GPRMC,000000.00,V,,,,,,,010100,,,N*7A",
+            }
+        elif command == "modem.check":
+            data = {
+                "at_ok": True,
+                "identity_ok": True,
+                "sim_ready": True,
+                "identity": "Quectel EG912 OK",
+                "sim_status": "+CPIN: READY OK",
+            }
+        elif command == "adc.sample":
+            data = {
+                "channel": request["channel"],
+                "samples": request["samples"],
+                "raw_average": 1000,
+                "raw_min": 995,
+                "raw_max": 1005,
+                "raw_noise": 10,
+                "engineering_units_approved": False,
+            }
+        elif command == "gpio.write":
+            data = {
+                "name": request["name"],
+                "gpio": 2 if request["name"] == "status_led" else 8,
+                "level": request["level"],
+                "active_low": True,
+            }
+        elif command == "fixture.record":
+            self.recorded_tests.add(request["test_id"])
+            data = {}
         elif command == "session.list":
             passed = {
                 "device_identity",
@@ -85,6 +121,11 @@ class FakeSerial:
                 "base_mac",
                 "thread_eui64",
                 "firmware_identity",
+                "gps_uart_rx",
+                "modem_uart",
+                "modem_identity",
+                "sim_presence",
+                *self.recorded_tests,
             }
             all_tests = [
                 "device_identity",
@@ -97,6 +138,22 @@ class FakeSerial:
                 "modem_identity",
                 "sim_presence",
                 "rail_3v3",
+                "rail_5v",
+                "gpio_lamp_ctrl",
+                "gpio_psw_en",
+                "gpio_modem_pwrkey",
+                "gpio_modem_reset",
+                "gpio_status_led",
+                "gpio_ctrl_led",
+                "adc_vrms",
+                "adc_irms",
+                "adc_5v",
+                "pwm",
+                "zcd_gpio",
+                "zcd_50hz",
+                "zcd_60hz",
+                "gps_uart_tx",
+                "modem_uart_tx_rx",
             ]
             data = {
                 "tests": [
@@ -136,6 +193,11 @@ class RunnerTests(unittest.TestCase):
             [
                 "identity",
                 "session.start",
+                "gps.check",
+                "modem.check",
+                "adc.sample",
+                "adc.sample",
+                "adc.sample",
                 "session.list",
                 "safe",
                 "session.abort",
@@ -159,6 +221,23 @@ class RunnerTests(unittest.TestCase):
         profile, digest = load_profile(Path(DEFAULT_PROFILE))
         self.assertFalse(profile["production_release"])
         self.assertRegex(digest, r"^[0-9A-F]{64}$")
+
+    def test_guided_led_sequence(self) -> None:
+        profile, profile_hash = load_profile(DEFAULT_PROFILE)
+        serial = FakeSerial()
+        answers = iter(["Y", "Y", "Y", "Y", "Y", "Y"])
+        report = run_partial_self_test(
+            S5OTBRFTClient(serial, "FAKE"),
+            profile,
+            profile_hash,
+            operator_id="OP-01",
+            input_func=lambda _: next(answers),
+        )
+        self.assertEqual(report["result"], "PARTIAL")
+        self.assertEqual(
+            serial.recorded_tests,
+            {"gpio_status_led", "gpio_ctrl_led"},
+        )
 
     def test_failure_errors_are_available_to_cli(self) -> None:
         profile, profile_hash = load_profile(DEFAULT_PROFILE)

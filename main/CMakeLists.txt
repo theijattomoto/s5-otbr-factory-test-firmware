@@ -9,14 +9,17 @@ idf_component_register(
         "factory_safety_esp.c"
         "factory_session.c"
         "factory_types.c"
+        "factory_tests.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         esp_driver_gpio
         esp_driver_usb_serial_jtag
+        esp_driver_uart
         esp_hw_support
         esp_system
         esp_timer
         json
+        esp_adc
         spi_flash
 )

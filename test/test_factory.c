@@ -75,6 +75,25 @@ static bool test_protocol_validation(void)
     CHECK(parse("@S5OTBRFT {\"seq\":1,\"cmd\":\"fixture.record\","
                 "\"test_id\":\"rail_3v3\",\"pass\":true,\"value\":NaN}",
                 &request) != FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":4,\"cmd\":\"gpio.write\","
+                "\"name\":\"status_led\",\"level\":0}", &request)
+          == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_GPIO_WRITE);
+    CHECK(request.level == 0);
+    CHECK(parse("@S5OTBRFT {\"seq\":5,\"cmd\":\"adc.sample\","
+                "\"channel\":\"dc5v\",\"samples\":64}", &request)
+          == FACTORY_OK);
+    CHECK(request.samples == 64);
+    CHECK(parse("@S5OTBRFT {\"seq\":6,\"cmd\":\"gps.check\","
+                "\"timeout_ms\":10000}", &request) == FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":7,\"cmd\":\"modem.check\","
+                "\"timeout_ms\":2000}", &request) == FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":8,\"cmd\":\"gpio.write\","
+                "\"name\":\"status_led\",\"level\":2}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
+    CHECK(parse("@S5OTBRFT {\"seq\":9,\"cmd\":\"adc.sample\","
+                "\"channel\":\"dc5v\",\"samples\":0}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
 
     char oversized[FACTORY_PROTOCOL_MAX_FRAME + 2];
     memset(oversized, 'A', sizeof(oversized));

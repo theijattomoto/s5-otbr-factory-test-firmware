@@ -1,0 +1,55 @@
+{
+  "profile_id": "s5-otbr-partial-v2",
+  "production_release": false,
+  "expected": {
+    "product": "S5-NODE-OTBR",
+    "board": "TBD",
+    "firmware": "0.2.0",
+    "protocol": "1.1",
+    "target": "esp32c6",
+    "flash_size_bytes": 4194304
+  },
+  "required_passed_tests": [
+    "device_identity",
+    "usb_protocol",
+    "base_mac",
+    "thread_eui64",
+    "firmware_identity",
+    "gps_uart_rx",
+    "modem_uart",
+    "modem_identity",
+    "sim_presence"
+  ],
+  "required_pending_tests": [
+    "rail_3v3",
+    "rail_5v",
+    "gpio_lamp_ctrl",
+    "gpio_psw_en",
+    "gpio_modem_pwrkey",
+    "gpio_modem_reset",
+    "adc_vrms",
+    "adc_irms",
+    "adc_5v",
+    "pwm",
+    "zcd_gpio",
+    "zcd_50hz",
+    "zcd_60hz",
+    "gps_uart_tx",
+    "modem_uart_tx_rx"
+  ],
+  "adc_samples": 64,
+  "gps_timeout_ms": 10000,
+  "modem_timeout_ms": 2000,
+  "guided_led_tests": [
+    {
+      "command_name": "status_led",
+      "display_name": "STATUS_LED",
+      "test_id": "gpio_status_led"
+    },
+    {
+      "command_name": "ctrl_led",
+      "display_name": "CTRL_LED",
+      "test_id": "gpio_ctrl_led"
+    }
+  ]
+}

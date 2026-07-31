@@ -16,6 +16,7 @@
 #include "factory_request.h"
 #include "factory_safety.h"
 #include "factory_session.h"
+#include "factory_tests.h"
 
 #define USB_RX_BUFFER_SIZE 1024
 #define USB_TX_BUFFER_SIZE 4096
@@ -70,8 +71,8 @@ static factory_result_t send_response(int32_t sequence, const char *command,
         static const char fallback[] =
             FACTORY_PROTOCOL_PREFIX
             "{\"seq\":0,\"cmd\":\"internal\",\"status\":\"error\","
-            "\"code\":\"no_memory\",\"firmware\":\"0.1.0\","
-            "\"protocol\":\"1.0\",\"product\":\"S5-NODE-OTBR\","
+            "\"code\":\"no_memory\",\"firmware\":\"0.2.0\","
+            "\"protocol\":\"1.1\",\"product\":\"S5-NODE-OTBR\","
             "\"board\":\"TBD\",\"data\":{}}\n";
         return usb_write_all(fallback, sizeof(fallback) - 1);
     }
@@ -97,8 +98,8 @@ static factory_result_t send_response(int32_t sequence, const char *command,
         static const char fallback[] =
             FACTORY_PROTOCOL_PREFIX
             "{\"seq\":0,\"cmd\":\"internal\",\"status\":\"error\","
-            "\"code\":\"no_memory\",\"firmware\":\"0.1.0\","
-            "\"protocol\":\"1.0\",\"product\":\"S5-NODE-OTBR\","
+            "\"code\":\"no_memory\",\"firmware\":\"0.2.0\","
+            "\"protocol\":\"1.1\",\"product\":\"S5-NODE-OTBR\","
             "\"board\":\"TBD\",\"data\":{}}\n";
         return usb_write_all(fallback, sizeof(fallback) - 1);
     }
@@ -219,6 +220,88 @@ static factory_result_t handle_request(const factory_request_t *request,
 
     factory_result_t result = require_session();
     if (result != FACTORY_OK) return result;
+
+    if (request->command == FACTORY_COMMAND_GPIO_WRITE) {
+        int gpio = -1;
+        result = factory_test_gpio_write(request->name, request->level, &gpio);
+        if (result != FACTORY_OK) return result;
+        result = factory_session_touch(esp_timer_get_time());
+        if (result != FACTORY_OK) return result;
+        cJSON_AddStringToObject(data, "name", request->name);
+        cJSON_AddNumberToObject(data, "gpio", gpio);
+        cJSON_AddNumberToObject(data, "level", request->level);
+        cJSON_AddBoolToObject(data, "active_low", true);
+        return FACTORY_OK;
+    }
+
+    if (request->command == FACTORY_COMMAND_ADC_SAMPLE) {
+        factory_adc_result_t sample = {0};
+        result = factory_test_adc_sample(request->channel, request->samples,
+                                         &sample);
+        if (result != FACTORY_OK) return result;
+        result = factory_session_touch(esp_timer_get_time());
+        if (result != FACTORY_OK) return result;
+        cJSON_AddStringToObject(data, "channel", sample.channel);
+        cJSON_AddNumberToObject(data, "samples", sample.samples);
+        cJSON_AddNumberToObject(data, "raw_average", sample.raw_average);
+        cJSON_AddNumberToObject(data, "raw_min", sample.raw_min);
+        cJSON_AddNumberToObject(data, "raw_max", sample.raw_max);
+        cJSON_AddNumberToObject(data, "raw_noise", sample.raw_noise);
+        cJSON_AddBoolToObject(data, "engineering_units_approved", false);
+        return FACTORY_OK;
+    }
+
+    if (request->command == FACTORY_COMMAND_GPS_CHECK) {
+        factory_gps_result_t gps = {0};
+        result = factory_test_gps(request->timeout_ms, &gps);
+        factory_result_t record_result = factory_manifest_record(
+            "gps_uart_rx", FACTORY_TEST_AUTOMATIC, result == FACTORY_OK,
+            false, 0.0, NULL,
+            result == FACTORY_OK ? "checksum-valid RMC received"
+                                 : "no checksum-valid RMC received");
+        if (record_result != FACTORY_OK) return record_result;
+        cJSON_AddBoolToObject(data, "nmea_received", gps.nmea_received);
+        cJSON_AddNumberToObject(data, "valid_nmea_sentences",
+                                gps.valid_nmea_sentences);
+        cJSON_AddNumberToObject(data, "valid_rmc_sentences",
+                                gps.valid_rmc_sentences);
+        cJSON_AddStringToObject(data, "sample", gps.sample);
+        if (result == FACTORY_OK) {
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
+    }
+
+    if (request->command == FACTORY_COMMAND_MODEM_CHECK) {
+        factory_modem_result_t modem = {0};
+        result = factory_test_modem(request->timeout_ms, &modem);
+        const struct {
+            const char *id;
+            bool passed;
+            const char *detail;
+        } modem_results[] = {
+            { "modem_uart", modem.at_ok, "AT response" },
+            { "modem_identity", modem.identity_ok, "ATI response" },
+            { "sim_presence", modem.sim_ready, "CPIN READY" },
+        };
+        for (size_t i = 0;
+             i < sizeof(modem_results) / sizeof(modem_results[0]); ++i) {
+            factory_result_t record_result = factory_manifest_record(
+                modem_results[i].id, FACTORY_TEST_AUTOMATIC,
+                modem_results[i].passed, false, 0.0, NULL,
+                modem_results[i].detail);
+            if (record_result != FACTORY_OK) return record_result;
+        }
+        cJSON_AddBoolToObject(data, "at_ok", modem.at_ok);
+        cJSON_AddBoolToObject(data, "identity_ok", modem.identity_ok);
+        cJSON_AddBoolToObject(data, "sim_ready", modem.sim_ready);
+        cJSON_AddStringToObject(data, "identity", modem.identity);
+        cJSON_AddStringToObject(data, "sim_status", modem.sim_status);
+        if (result == FACTORY_OK) {
+            result = factory_session_touch(esp_timer_get_time());
+        }
+        return result;
+    }
 
     if (request->command == FACTORY_COMMAND_SESSION_LIST) {
         result = factory_session_touch(esp_timer_get_time());

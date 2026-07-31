@@ -65,6 +65,10 @@ static factory_command_t command_from_text(const char *text)
     if (strcmp(text, "session.abort") == 0) return FACTORY_COMMAND_SESSION_ABORT;
     if (strcmp(text, "fixture.record") == 0) return FACTORY_COMMAND_FIXTURE_RECORD;
     if (strcmp(text, "safe") == 0) return FACTORY_COMMAND_SAFE;
+    if (strcmp(text, "gpio.write") == 0) return FACTORY_COMMAND_GPIO_WRITE;
+    if (strcmp(text, "adc.sample") == 0) return FACTORY_COMMAND_ADC_SAMPLE;
+    if (strcmp(text, "gps.check") == 0) return FACTORY_COMMAND_GPS_CHECK;
+    if (strcmp(text, "modem.check") == 0) return FACTORY_COMMAND_MODEM_CHECK;
     return FACTORY_COMMAND_UNKNOWN;
 }
 
@@ -80,6 +84,18 @@ static bool field_allowed(factory_command_t command, const char *field)
                strcmp(field, "value") == 0 ||
                strcmp(field, "unit") == 0 ||
                strcmp(field, "detail") == 0;
+    }
+    if (command == FACTORY_COMMAND_GPIO_WRITE) {
+        return strcmp(field, "name") == 0 ||
+               strcmp(field, "level") == 0;
+    }
+    if (command == FACTORY_COMMAND_ADC_SAMPLE) {
+        return strcmp(field, "channel") == 0 ||
+               strcmp(field, "samples") == 0;
+    }
+    if (command == FACTORY_COMMAND_GPS_CHECK ||
+        command == FACTORY_COMMAND_MODEM_CHECK) {
+        return strcmp(field, "timeout_ms") == 0;
     }
     return false;
 }
@@ -186,6 +202,38 @@ factory_result_t factory_request_parse(const char *line, size_t length,
                              sizeof(request->unit), false) &&
             copy_json_string(root, "detail", request->detail,
                              sizeof(request->detail), false);
+    } else if (request->command == FACTORY_COMMAND_GPIO_WRITE) {
+        valid = copy_json_string(root, "name", request->name,
+                                 sizeof(request->name), true);
+        const cJSON *level = cJSON_GetObjectItemCaseSensitive(root, "level");
+        valid = valid && cJSON_IsNumber(level) &&
+                isfinite(level->valuedouble) &&
+                floor(level->valuedouble) == level->valuedouble &&
+                (level->valuedouble == 0 || level->valuedouble == 1);
+        if (valid) request->level = (int)level->valuedouble;
+    } else if (request->command == FACTORY_COMMAND_ADC_SAMPLE) {
+        valid = copy_json_string(root, "channel", request->channel,
+                                 sizeof(request->channel), true);
+        const cJSON *samples =
+            cJSON_GetObjectItemCaseSensitive(root, "samples");
+        valid = valid && cJSON_IsNumber(samples) &&
+                isfinite(samples->valuedouble) &&
+                floor(samples->valuedouble) == samples->valuedouble &&
+                samples->valuedouble >= 1 &&
+                samples->valuedouble <= 1024;
+        if (valid) request->samples = (uint32_t)samples->valuedouble;
+    } else if (request->command == FACTORY_COMMAND_GPS_CHECK ||
+               request->command == FACTORY_COMMAND_MODEM_CHECK) {
+        const cJSON *timeout =
+            cJSON_GetObjectItemCaseSensitive(root, "timeout_ms");
+        valid = cJSON_IsNumber(timeout) &&
+                isfinite(timeout->valuedouble) &&
+                floor(timeout->valuedouble) == timeout->valuedouble &&
+                timeout->valuedouble >= 100 &&
+                timeout->valuedouble <=
+                    (request->command == FACTORY_COMMAND_GPS_CHECK
+                         ? 30000 : 10000);
+        if (valid) request->timeout_ms = (uint32_t)timeout->valuedouble;
     }
 
     cJSON_Delete(root);

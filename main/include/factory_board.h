@@ -9,8 +9,8 @@
 
 #define FACTORY_PRODUCT_NAME              "S5-NODE-OTBR"
 #define FACTORY_BOARD_REVISION            "TBD"
-#define FACTORY_FIRMWARE_VERSION           "0.1.0"
-#define FACTORY_PROTOCOL_VERSION           "1.0"
+#define FACTORY_FIRMWARE_VERSION           "0.2.0"
+#define FACTORY_PROTOCOL_VERSION           "1.1"
 
 #define FACTORY_GPIO_LAMP_CONTROL          0
 #define FACTORY_GPIO_MODEM_POWER_KEY       1

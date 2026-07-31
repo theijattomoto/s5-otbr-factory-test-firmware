@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1 partial automation for S5 Node-OTBR factory-test firmware."""
+"""Partial automation for S5 Node-OTBR factory-test firmware."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 PROTOCOL_PREFIX = "@S5OTBRFT "
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 DEFAULT_PROFILE = (
     Path(__file__).resolve().parent
     / "profiles"
-    / "s5-otbr-phase1-partial-v1.json"
+    / "s5-otbr-partial-v2.json"
 )
 
 
@@ -51,6 +51,10 @@ def load_profile(path: Path) -> tuple[dict[str, Any], str]:
         "expected",
         "required_passed_tests",
         "required_pending_tests",
+        "adc_samples",
+        "gps_timeout_ms",
+        "modem_timeout_ms",
+        "guided_led_tests",
     }
     missing = sorted(required - profile.keys())
     if missing:
@@ -65,6 +69,12 @@ def load_profile(path: Path) -> tuple[dict[str, Any], str]:
             isinstance(value, str) and value for value in values
         ):
             raise ValidationError(f"Profile {name} must be a string array")
+    for name in ("adc_samples", "gps_timeout_ms", "modem_timeout_ms"):
+        value = profile[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValidationError(f"Profile {name} must be a positive integer")
+    if not isinstance(profile["guided_led_tests"], list):
+        raise ValidationError("Profile guided_led_tests must be an array")
     return profile, hashlib.sha256(raw).hexdigest().upper()
 
 
@@ -284,6 +294,62 @@ def summarize_manifest(data: dict[str, Any]) -> dict[str, list[str]]:
     return summary
 
 
+def validate_gps(response: dict[str, Any]) -> dict[str, Any]:
+    data = require_ok(response, "gps.check")
+    if data.get("nmea_received") is not True:
+        raise ValidationError("GPS did not receive a checksum-valid RMC sentence")
+    count = data.get("valid_rmc_sentences")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValidationError("GPS response has no valid RMC sentence count")
+    if not isinstance(data.get("sample"), str) or not data["sample"].startswith(
+        ("$GPRMC,", "$GNRMC,")
+    ):
+        raise ValidationError("GPS response has no valid RMC sample")
+    return data
+
+
+def validate_modem(response: dict[str, Any]) -> dict[str, Any]:
+    data = require_ok(response, "modem.check")
+    for field in ("at_ok", "identity_ok", "sim_ready"):
+        if data.get(field) is not True:
+            raise ValidationError(f"EG912 check failed: {field}=false")
+    if not isinstance(data.get("identity"), str) or not data["identity"]:
+        raise ValidationError("EG912 response has no model identity")
+    return data
+
+
+def validate_adc(response: dict[str, Any], channel: str) -> dict[str, Any]:
+    data = require_ok(response, f"adc.sample {channel}")
+    if data.get("channel") != channel:
+        raise ValidationError(f"ADC returned wrong channel for {channel}")
+    for field in ("samples", "raw_average", "raw_min", "raw_max", "raw_noise"):
+        value = data.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValidationError(f"ADC {channel} has no numeric {field}")
+    if data.get("engineering_units_approved") is not False:
+        raise ValidationError("ADC snapshot incorrectly claims approved units")
+    return data
+
+
+def prompt_yes_no(
+    prompt: str,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> bool:
+    while True:
+        try:
+            answer = input_func(prompt).strip().upper()
+        except EOFError as exc:
+            raise ValidationError(
+                "Operator input ended before confirmation"
+            ) from exc
+        if answer == "Y":
+            return True
+        if answer == "N":
+            return False
+        output_func("Please enter Y or N.")
+
+
 def best_effort_command(
     client: S5OTBRFTClient,
     command: str,
@@ -303,12 +369,21 @@ def run_partial_self_test(
     profile: dict[str, Any],
     profile_hash: str,
     requested_unit_id: str | None = None,
+    operator_id: str | None = None,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
 ) -> dict[str, Any]:
+    guided = operator_id is not None
+    if guided and re.fullmatch(r"[A-Za-z0-9_.-]{1,20}", operator_id) is None:
+        raise ValidationError(
+            "operator-id must use 1..20 letters, digits, period, underscore "
+            "or hyphen"
+        )
     errors: list[str] = []
     report: dict[str, Any] = {
         "schema_version": 1,
         "tool": {"name": "s5otbrft_runner", "version": TOOL_VERSION},
-        "operation": "self-test",
+        "operation": "guided-test" if guided else "self-test",
         "profile": {
             "id": profile["profile_id"],
             "sha256": profile_hash,
@@ -320,7 +395,12 @@ def run_partial_self_test(
         "ended_utc": None,
         "result": "RUNNING",
         "unit_id": requested_unit_id,
+        "operator_id": operator_id,
         "identity": None,
+        "gps": None,
+        "modem": None,
+        "adc_snapshots": {},
+        "leds": {},
         "manifest": {"passed": [], "pending": [], "failed": []},
         "errors": errors,
         "safety_cleanup": {"safe": False, "abort": False},
@@ -344,6 +424,95 @@ def run_partial_self_test(
             client.command("session.start", unit_id=unit_id),
             "session.start",
         )
+
+        gps_timeout_ms = int(profile["gps_timeout_ms"])
+        report["gps"] = validate_gps(
+            client.command(
+                "gps.check",
+                timeout_s=(gps_timeout_ms / 1000.0) + 3.0,
+                timeout_ms=gps_timeout_ms,
+            )
+        )
+
+        modem_timeout_ms = int(profile["modem_timeout_ms"])
+        report["modem"] = validate_modem(
+            client.command(
+                "modem.check",
+                timeout_s=(modem_timeout_ms * 3 / 1000.0) + 3.0,
+                timeout_ms=modem_timeout_ms,
+            )
+        )
+
+        for channel in ("vrms", "irms", "dc5v"):
+            report["adc_snapshots"][channel] = validate_adc(
+                client.command(
+                    "adc.sample",
+                    channel=channel,
+                    samples=int(profile["adc_samples"]),
+                ),
+                channel,
+            )
+
+        if guided:
+            led_states = (
+                (1, "OFF"),
+                (0, "ON"),
+                (1, "OFF"),
+            )
+            for led in profile["guided_led_tests"]:
+                command_name = led["command_name"]
+                display_name = led["display_name"]
+                test_id = led["test_id"]
+                observations: list[dict[str, Any]] = []
+                report["leds"][command_name] = observations
+                passed = True
+                for level, expected in led_states:
+                    data = require_ok(
+                        client.command(
+                            "gpio.write", name=command_name, level=level
+                        ),
+                        f"gpio.write {command_name}",
+                    )
+                    confirmed = prompt_yes_no(
+                        f"{display_name} should be {expected}. "
+                        f"Is it {expected}? [Y/N] ",
+                        input_func,
+                        output_func,
+                    )
+                    observations.append(
+                        {
+                            "timestamp_utc": utc_now(),
+                            "gpio": data.get("gpio"),
+                            "level": level,
+                            "expected_state": expected,
+                            "confirmed": confirmed,
+                        }
+                    )
+                    if not confirmed:
+                        passed = False
+                        break
+
+                states = "".join(
+                    "Y" if observation["confirmed"] else "N"
+                    for observation in observations
+                )
+                require_ok(
+                    client.command(
+                        "fixture.record",
+                        test_id=test_id,
+                        **{"pass": passed},
+                        detail=(
+                            f"method=operator_visual;op={operator_id};"
+                            f"states={states}"
+                        ),
+                    ),
+                    f"fixture.record {test_id}",
+                )
+                if not passed:
+                    raise ValidationError(
+                        f"{display_name} did not match the expected state"
+                    )
+
         manifest_data = require_ok(
             client.command("session.list"), "session.list"
         )
@@ -354,6 +523,11 @@ def run_partial_self_test(
         missing_passed = sorted(
             set(profile["required_passed_tests"]) - passed
         )
+        if guided:
+            required_leds = {
+                led["test_id"] for led in profile["guided_led_tests"]
+            }
+            missing_passed.extend(sorted(required_leds - passed))
         missing_pending = sorted(
             set(profile["required_pending_tests"]) - pending
         )
@@ -486,7 +660,7 @@ def select_port(profile: dict[str, Any], explicit_port: str | None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="S5 Node-OTBR Phase 1 partial factory automation"
+        description="S5 Node-OTBR partial factory automation"
     )
     parser.add_argument(
         "--profile",
@@ -505,6 +679,21 @@ def build_parser() -> argparse.ArgumentParser:
     self_test.add_argument("--port", help="Serial port; auto-detected if omitted")
     self_test.add_argument("--unit-id", help="Barcode; defaults to base MAC")
     self_test.add_argument("--output", type=Path, help="JSON report path")
+    for operation, help_text in (
+        ("guided-test", "Run automatic tests plus guided LED checks"),
+        ("led-check", "Compatibility alias for guided-test"),
+    ):
+        guided = subparsers.add_parser(operation, help=help_text)
+        guided.add_argument(
+            "--port", help="Serial port; auto-detected if omitted"
+        )
+        guided.add_argument("--unit-id", help="Barcode; defaults to base MAC")
+        guided.add_argument(
+            "--operator-id",
+            required=True,
+            help="Operator identifier using 1..20 safe characters",
+        )
+        guided.add_argument("--output", type=Path, help="JSON report path")
     return parser
 
 
@@ -522,7 +711,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             client.observe_ready()
             report = run_partial_self_test(
-                client, profile, profile_hash, args.unit_id
+                client,
+                profile,
+                profile_hash,
+                args.unit_id,
+                operator_id=(
+                    args.operator_id
+                    if args.operation in {"guided-test", "led-check"}
+                    else None
+                ),
             )
         finally:
             handle.close()

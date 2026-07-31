@@ -1,9 +1,9 @@
 # S5 Node-OTBR PCB Factory-Test Firmware
 
 Deterministic low-voltage factory-test firmware for assembled S5 Node-OTBR
-PCBs based on the ESP32-C6. Phase 1 provides safe initialization, device
-identity, a strict native-USB protocol, traceable sessions, and a fail-closed
-test manifest.
+PCBs based on the ESP32-C6. It provides safe initialization, device identity,
+a strict native-USB protocol, traceable sessions, partial peripheral
+automation, guided LED checks, and a fail-closed test manifest.
 
 This image is a foundation for finding assembly faults such as missing,
 misoriented, open, shorted, stuck, or incorrectly connected components. GPIO
@@ -33,7 +33,7 @@ The physical pad level is deliberately not used as proof that output
 configuration succeeded because assembled board circuitry can load the pad;
 the approved fixture remains authoritative.
 
-## Phase 1 behavior
+## Protocol behavior
 
 The firmware sends and accepts one JSON object per line with the exact prefix:
 
@@ -46,9 +46,10 @@ Implemented commands are `identity`, `session.start`, `session.list`,
 [the protocol specification](docs/factory_protocol.md) for schemas and stable
 error codes.
 
-The provisional manifest contains future GPS and EG912 automatic tests that
-Phase 1 cannot complete. Therefore, `session.finish` cannot return PASS in this
-phase even if every station-owned item is recorded. This is intentional.
+The provisional manifest still contains fixture-authoritative rail, GPIO,
+calibration, PWM, ZCD, GPS transmit, and modem bidirectional tests.
+`session.finish` cannot return PASS from the partial workflow. This is
+intentional.
 
 ## Build
 
@@ -75,7 +76,7 @@ cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
 ```
 
-## Phase 1 partial automation
+## Partial automation
 
 Install the pinned host dependency, discover the DUT, and run the automatic
 no-fixture test:
@@ -84,6 +85,7 @@ no-fixture test:
 python -m pip install -r tools/requirements.txt
 python -m tools.s5otbrft_runner discover
 python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001
+python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01
 ```
 
 `--port` and `--unit-id` are optional when exactly one matching DUT is
@@ -92,9 +94,18 @@ from the base MAC. Reports are written atomically under `reports/`.
 
 A successful run is always `PARTIAL`, never production PASS. It validates the
 USB protocol envelope, product/board/firmware/protocol identity, ESP32-C6
-target, 4 MB flash, base MAC, IEEE 802.15.4 EUI-64, traceable session, and
-manifest state. GPS, EG912, rail, GPIO, ADC, PWM, and ZCD tests remain pending.
-Every run finishes with `safe` and `session.abort`, including failed runs.
+target, 4 MB flash, base MAC, IEEE 802.15.4 EUI-64, checksum-valid GPS RMC
+reception, EG912 AT/model/SIM readiness, raw VRMS/IRMS/5 V ADC snapshots,
+traceable session, and manifest state.
+
+`guided-test` adds active-low status and control LED OFF-ON-OFF observations.
+The operator answers only `Y` or `N`; the visual verdicts are recorded in the
+same JSON report. `led-check` is a compatibility alias.
+
+Rail acceptance, ADC engineering-unit calibration, lamp/modem power outputs,
+`PSW_EN`, PWM, ZCD frequency, mains, lamp load, and metering tests remain
+pending. Every run finishes with `safe` and `session.abort`, including failed
+runs.
 Failure reasons are printed immediately and retained in the JSON report.
 
 Run the station-runner unit tests without hardware:

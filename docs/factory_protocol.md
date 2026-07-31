@@ -1,4 +1,4 @@
-# S5 Node-OTBR Factory Protocol 1.0
+# S5 Node-OTBR Factory Protocol 1.1
 
 ## Purpose
 
@@ -22,6 +22,17 @@ measurement; firmware GPIO readback alone is not assembly evidence.
 An oversized frame is discarded through its line ending. Malformed, invalid,
 oversized, or unknown input triggers `safe` before the error response.
 
+Implemented partial-test commands also include:
+
+- `gpio.write`: allow-listed `status_led` and `ctrl_led` outputs only.
+- `adc.sample`: raw `vrms`, `irms`, or `dc5v` snapshots using 1..1024 samples.
+- `gps.check`: checksum-valid `$GPRMC` or `$GNRMC` reception.
+- `modem.check`: bounded `AT`, `ATI`, and `AT+CPIN?` checks.
+
+No command exposes `PSW_EN`, lamp control, modem power/reset, mains, or Thread
+network operation. ADC responses explicitly state that engineering units are
+not approved.
+
 ## Envelope
 
 Every response includes:
@@ -32,8 +43,8 @@ Every response includes:
   "cmd": "identity",
   "status": "ok",
   "code": "ok",
-  "firmware": "0.1.0",
-  "protocol": "1.0",
+  "firmware": "0.2.0",
+  "protocol": "1.1",
   "product": "S5-NODE-OTBR",
   "board": "TBD",
   "data": {}
@@ -82,13 +93,13 @@ immediately reapplies safe state.
 
 Reapplies safe state and returns `code:"pass"` only if every manifest entry is
 PASS and cleanup succeeds. Pending items, failed items, or cleanup failure
-prevent PASS. Phase 1 necessarily remains incomplete because GPS and modem
-automatic tests are not implemented.
+prevent PASS. The partial workflow necessarily remains incomplete because
+fixture-authoritative tests remain pending.
 
 ### `session.abort`
 
-Idempotently marks the session aborted and reapplies safe state, including
-when no session is active.
+Idempotently reapplies safe state. An active or idle session becomes aborted;
+completed and expired terminal states are preserved.
 
 ### `safe`
 
