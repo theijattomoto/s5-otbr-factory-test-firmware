@@ -75,6 +75,43 @@ static bool test_protocol_validation(void)
     CHECK(parse("@S5OTBRFT {\"seq\":1,\"cmd\":\"fixture.record\","
                 "\"test_id\":\"rail_3v3\",\"pass\":true,\"value\":NaN}",
                 &request) != FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":4,\"cmd\":\"gpio.write\","
+                "\"name\":\"status_led\",\"level\":0}", &request)
+          == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_GPIO_WRITE);
+    CHECK(request.level == 0);
+    CHECK(parse("@S5OTBRFT {\"seq\":5,\"cmd\":\"adc.sample\","
+                "\"channel\":\"dc5v\",\"samples\":64}", &request)
+          == FACTORY_OK);
+    CHECK(request.samples == 64);
+    CHECK(parse("@S5OTBRFT {\"seq\":6,\"cmd\":\"gps.check\","
+                "\"timeout_ms\":10000}", &request) == FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":7,\"cmd\":\"modem.check\","
+                "\"timeout_ms\":2000}", &request) == FACTORY_OK);
+    CHECK(parse("@S5OTBRFT {\"seq\":10,\"cmd\":\"adc.waveform\","
+                "\"channel\":\"vrms\",\"samples\":1000,"
+                "\"sample_interval_us\":50}", &request) == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_ADC_WAVEFORM);
+    CHECK(request.sample_interval_us == 50);
+    CHECK(parse("@S5OTBRFT {\"seq\":11,\"cmd\":\"pwm.set\","
+                "\"duty_percent\":40}", &request) == FACTORY_OK);
+    CHECK(request.duty_percent == 40);
+    CHECK(parse("@S5OTBRFT {\"seq\":12,\"cmd\":\"zcd.capture\","
+                "\"expected_hz\":50,\"duration_ms\":1000}", &request)
+          == FACTORY_OK);
+    CHECK(request.expected_hz == 50 && request.duration_ms == 1000);
+    CHECK(parse("@S5OTBRFT {\"seq\":13,\"cmd\":\"spi.sensor\"}", &request)
+          == FACTORY_OK);
+    CHECK(request.command == FACTORY_COMMAND_SPI_SENSOR);
+    CHECK(parse("@S5OTBRFT {\"seq\":14,\"cmd\":\"pwm.set\","
+                "\"duty_percent\":45}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
+    CHECK(parse("@S5OTBRFT {\"seq\":8,\"cmd\":\"gpio.write\","
+                "\"name\":\"status_led\",\"level\":2}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
+    CHECK(parse("@S5OTBRFT {\"seq\":9,\"cmd\":\"adc.sample\","
+                "\"channel\":\"dc5v\",\"samples\":0}", &request)
+          == FACTORY_ERR_INVALID_REQUEST);
 
     char oversized[FACTORY_PROTOCOL_MAX_FRAME + 2];
     memset(oversized, 'A', sizeof(oversized));
@@ -159,6 +196,8 @@ static bool test_session(void)
     CHECK(!factory_session_is_active());
 
     CHECK(factory_session_abort() == FACTORY_OK);
+    factory_session_snapshot(&snapshot);
+    CHECK(snapshot.state == FACTORY_SESSION_COMPLETED);
     CHECK(factory_session_abort() == FACTORY_OK);
 
     CHECK(factory_session_start("PCB-003", 1000) == FACTORY_OK);

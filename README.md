@@ -1,9 +1,9 @@
 # S5 Node-OTBR PCB Factory-Test Firmware
 
 Deterministic low-voltage factory-test firmware for assembled S5 Node-OTBR
-PCBs based on the ESP32-C6. Phase 1 provides safe initialization, device
-identity, a strict native-USB protocol, traceable sessions, and a fail-closed
-test manifest.
+PCBs based on the ESP32-C6. It provides safe initialization, device identity,
+a strict native-USB protocol, traceable sessions, partial peripheral
+automation, guided LED checks, and a fail-closed test manifest.
 
 This image is a foundation for finding assembly faults such as missing,
 misoriented, open, shorted, stuck, or incorrectly connected components. GPIO
@@ -27,7 +27,13 @@ requires approved fixture measurements or optical/current observation.
 GPIO latch readback during initialization confirms the ESP-IDF configuration,
 not the assembled electrical net.
 
-## Phase 1 behavior
+If safe initialization fails, the firmware logs the exact GPIO and ESP-IDF
+operation and enters a stable fail-stop state. It does not continuously reboot.
+The physical pad level is deliberately not used as proof that output
+configuration succeeded because assembled board circuitry can load the pad;
+the approved fixture remains authoritative.
+
+## Protocol behavior
 
 The firmware sends and accepts one JSON object per line with the exact prefix:
 
@@ -40,9 +46,10 @@ Implemented commands are `identity`, `session.start`, `session.list`,
 [the protocol specification](docs/factory_protocol.md) for schemas and stable
 error codes.
 
-The provisional manifest contains future GPS and EG912 automatic tests that
-Phase 1 cannot complete. Therefore, `session.finish` cannot return PASS in this
-phase even if every station-owned item is recorded. This is intentional.
+The provisional manifest still contains fixture-authoritative rail, GPIO,
+calibration, PWM, ZCD, GPS transmit, and modem bidirectional tests.
+`session.finish` cannot return PASS from the partial workflow. This is
+intentional.
 
 ## Build
 
@@ -67,6 +74,61 @@ cmake -S test -B build-host-tests -G Ninja `
   -DIDF_PATH=C:/esp/v5.5.3/esp-idf
 cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
+```
+
+## Partial automation
+
+Install the pinned host dependency, discover the DUT, and run the automatic
+no-fixture test:
+
+```powershell
+python -m pip install -r tools/requirements.txt
+python -m tools.s5otbrft_runner discover
+python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001
+python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01
+```
+
+Development runs show `[START]`, `[TEST]`, `[MEASURE]`, `[PASS]`, `[PENDING]`,
+`[FAIL]`, and `[SAFE]` progress directly in the terminal. Add `--verbose` to print
+every transmitted and received protocol frame:
+
+```powershell
+python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001 --verbose
+python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01 --verbose
+```
+
+`--port` and `--unit-id` are optional when exactly one matching DUT is
+connected. Without a unit ID, the runner derives an engineering identifier
+from the base MAC. Reports are written atomically under `reports/`.
+
+A successful run is always `PARTIAL`, never production PASS. The guided flow
+follows the S5-Node electrical profile: operator-measured 3.3 V, WSEN SPI,
+checksum-valid GPS NMEA, EG912 AT/model/SIM, 220–260 VAC VRMS, 45–55 Hz ZCD,
+authorized LAMP_CTRL OFF–ON–OFF IRMS response, inverted 11-point PWM/IRMS
+sweep, calibrated 5 V rail, LEDs, traceable session, and manifest state.
+
+`guided-test` adds active-low status and control LED OFF-ON-OFF observations.
+The operator answers only `Y` or `N`; the visual verdicts are recorded in the
+same JSON report. `led-check` is a compatibility alias.
+
+The VRMS and IRMS formulas, 5 V divider, thresholds, LAMP_CTRL criteria, and
+PWM trend rules intentionally match `s5-node-factory-test`. AC and lamp tests
+must only run with the approved isolated supply/load and a trained operator.
+Every run restores PWM and controlled outputs before `safe` and
+`session.abort`, including failed runs.
+
+Peripheral failures do not stop the remaining safe tests. The runner continues
+through GPS, modem, every ADC channel, guided LEDs, and manifest capture when
+the serial protocol remains trustworthy. A framing, sequence, or transport
+failure stops active testing. Each run ends with a consolidated terminal
+result and JSON report path, failure reasons, failed and pending manifest test
+IDs, and one final S5-Node-style manifest summary. Failure reasons are also
+retained in the JSON report.
+
+Run the station-runner unit tests without hardware:
+
+```powershell
+python -m unittest tools.test_s5otbrft_runner -v
 ```
 
 ## Hardware verification still required

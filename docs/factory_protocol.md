@@ -1,4 +1,4 @@
-# S5 Node-OTBR Factory Protocol 1.0
+# S5 Node-OTBR Factory Protocol 1.1
 
 ## Purpose
 
@@ -22,6 +22,21 @@ measurement; firmware GPIO readback alone is not assembly evidence.
 An oversized frame is discarded through its line ending. Malformed, invalid,
 oversized, or unknown input triggers `safe` before the error response.
 
+Implemented partial-test commands also include:
+
+- `gpio.write`: allow-listed `lamp_ctrl`, `status_led`, and `ctrl_led`.
+- `adc.sample`: calibrated `dc5v` measurement using 1..1024 samples.
+- `adc.waveform`: bias-independent VRMS/IRMS capture and S5 conversion.
+- `pwm.set`: 1 kHz inverted dimming duty in approved 10% steps.
+- `zcd.capture`: bounded 50/60 Hz transition capture.
+- `spi.sensor`: WSEN WHO_AM_I and XYZ sample on GPIO20–23.
+- `gps.check`: receipt of any checksum-valid NMEA sentence.
+- `modem.check`: bounded `AT`, `ATI`, and `AT+CPIN?` checks.
+
+No command exposes `PSW_EN`, modem power/reset, or Thread network operation.
+Mains and lamp commands require the guided runner's explicit isolated-load
+authorization and always finish with safe output cleanup.
+
 ## Envelope
 
 Every response includes:
@@ -32,8 +47,8 @@ Every response includes:
   "cmd": "identity",
   "status": "ok",
   "code": "ok",
-  "firmware": "0.1.0",
-  "protocol": "1.0",
+  "firmware": "0.3.0",
+  "protocol": "1.2",
   "product": "S5-NODE-OTBR",
   "board": "TBD",
   "data": {}
@@ -82,13 +97,13 @@ immediately reapplies safe state.
 
 Reapplies safe state and returns `code:"pass"` only if every manifest entry is
 PASS and cleanup succeeds. Pending items, failed items, or cleanup failure
-prevent PASS. Phase 1 necessarily remains incomplete because GPS and modem
-automatic tests are not implemented.
+prevent PASS. The partial workflow necessarily remains incomplete because
+fixture-authoritative tests remain pending.
 
 ### `session.abort`
 
-Idempotently marks the session aborted and reapplies safe state, including
-when no session is active.
+Idempotently reapplies safe state. An active or idle session becomes aborted;
+completed and expired terminal states are preserved.
 
 ### `safe`
 
@@ -111,7 +126,8 @@ unresolved.
 `invalid_parameter`, `invalid_frame`, `invalid_json`, `invalid_request`,
 `frame_too_long`, `unknown_command`, `unknown_test`, `invalid_state`,
 `result_immutable`, `test_owner_mismatch`, `incomplete_or_failed`,
-`session_timeout`, `cleanup_failed`, `hardware_error`, and `no_memory`.
+`session_timeout`, `cleanup_failed`, `transport_error`, `hardware_error`,
+`measurement_out_of_range`, `frequency_out_of_range`, and `no_memory`.
 
 ## Provisional manifest
 
@@ -119,6 +135,7 @@ Automatic:
 
 ```text
 device_identity, usb_protocol, base_mac, thread_eui64, firmware_identity,
+spi_wsen, gpio_spi_cs1, gpio_spi_sck, gpio_spi_mosi, gpio_spi_miso,
 gps_uart_rx, modem_uart, modem_identity, sim_presence
 ```
 

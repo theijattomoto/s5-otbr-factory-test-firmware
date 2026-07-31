@@ -1,9 +1,0 @@
-# ninja log v7
-79	319	8071737103524225	CMakeFiles/factory_host_tests.dir/601ac55fc1fc18b47ebf7116f1675602/main/factory_types.c.obj	b251b5a3a5d38a93
-65	335	8071737103388512	CMakeFiles/factory_host_tests.dir/601ac55fc1fc18b47ebf7116f1675602/main/factory_safety.c.obj	b54cd1036189a675
-72	364	8071737103453387	CMakeFiles/factory_host_tests.dir/601ac55fc1fc18b47ebf7116f1675602/main/factory_session.c.obj	c63761386731eecf
-49	366	8071737103224523	CMakeFiles/factory_host_tests.dir/601ac55fc1fc18b47ebf7116f1675602/main/factory_manifest.c.obj	7ac70190a5341510
-57	382	8071737103258279	CMakeFiles/factory_host_tests.dir/601ac55fc1fc18b47ebf7116f1675602/main/factory_request.c.obj	e377f87d33d78da6
-43	418	8071737103099133	CMakeFiles/factory_host_tests.dir/test_factory.c.obj	a27f63bd868460ad
-87	533	8071737103606666	CMakeFiles/factory_host_tests.dir/C_/esp/v5.5.3/esp-idf/components/json/cJSON/cJSON.c.obj	3aa8d3e44c30be6
-533	742	8071737108066617	factory_host_tests.exe	bb0520a96c08a25b

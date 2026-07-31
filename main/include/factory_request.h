@@ -11,6 +11,7 @@
 #define FACTORY_PROTOCOL_MAX_FRAME       767
 #define FACTORY_COMMAND_MAX              32
 #define FACTORY_TEST_ID_MAX              40
+#define FACTORY_NAME_MAX                 24
 
 typedef enum {
     FACTORY_COMMAND_UNKNOWN = 0,
@@ -20,7 +21,15 @@ typedef enum {
     FACTORY_COMMAND_SESSION_FINISH,
     FACTORY_COMMAND_SESSION_ABORT,
     FACTORY_COMMAND_FIXTURE_RECORD,
-    FACTORY_COMMAND_SAFE
+    FACTORY_COMMAND_SAFE,
+    FACTORY_COMMAND_GPIO_WRITE,
+    FACTORY_COMMAND_ADC_SAMPLE,
+    FACTORY_COMMAND_ADC_WAVEFORM,
+    FACTORY_COMMAND_PWM_SET,
+    FACTORY_COMMAND_ZCD_CAPTURE,
+    FACTORY_COMMAND_SPI_SENSOR,
+    FACTORY_COMMAND_GPS_CHECK,
+    FACTORY_COMMAND_MODEM_CHECK
 } factory_command_t;
 
 typedef struct {
@@ -34,6 +43,16 @@ typedef struct {
     double value;
     char unit[FACTORY_MANIFEST_UNIT_MAX];
     char detail[FACTORY_MANIFEST_DETAIL_MAX];
+    char name[FACTORY_NAME_MAX];
+    char channel[FACTORY_NAME_MAX];
+    int level;
+    uint32_t samples;
+    uint32_t sample_interval_us;
+    uint32_t duration_ms;
+    int duty_percent;
+    int expected_hz;
+    char mode[FACTORY_NAME_MAX];
+    uint32_t timeout_ms;
 } factory_request_t;
 
 factory_result_t factory_request_parse(const char *line, size_t length,

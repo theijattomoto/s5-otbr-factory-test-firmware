@@ -136,7 +136,15 @@ factory_result_t factory_session_abort(void)
     if (s_cleanup == NULL) {
         return FACTORY_ERR_INVALID_STATE;
     }
-    s_session.state = FACTORY_SESSION_ABORTED;
+
+    /*
+     * Safety cleanup is always idempotent, but terminal audit states must not
+     * be rewritten by a repeated or late abort request.
+     */
+    if (s_session.state == FACTORY_SESSION_ACTIVE ||
+        s_session.state == FACTORY_SESSION_IDLE) {
+        s_session.state = FACTORY_SESSION_ABORTED;
+    }
     refresh_summary();
     return s_cleanup() == FACTORY_OK ? FACTORY_OK : FACTORY_ERR_CLEANUP;
 }

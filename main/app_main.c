@@ -15,8 +15,12 @@ void app_main(void)
     if (result != FACTORY_OK) {
         ESP_LOGE(TAG, "safe initialization failed: %s",
                  factory_result_code(result));
-        vTaskDelay(pdMS_TO_TICKS(100));
-        esp_restart();
+        ESP_LOGE(TAG,
+                 "factory protocol disabled; reset or power-cycle after "
+                 "correcting the GPIO configuration");
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
 
     result = factory_protocol_init();
