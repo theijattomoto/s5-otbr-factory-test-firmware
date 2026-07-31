@@ -75,6 +75,33 @@ cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
 ```
 
+## Phase 1 partial automation
+
+Install the pinned host dependency, discover the DUT, and run the automatic
+no-fixture test:
+
+```powershell
+python -m pip install -r tools/requirements.txt
+python -m tools.s5otbrft_runner discover
+python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001
+```
+
+`--port` and `--unit-id` are optional when exactly one matching DUT is
+connected. Without a unit ID, the runner derives an engineering identifier
+from the base MAC. Reports are written atomically under `reports/`.
+
+A successful run is always `PARTIAL`, never production PASS. It validates the
+USB protocol envelope, product/board/firmware/protocol identity, ESP32-C6
+target, 4 MB flash, base MAC, IEEE 802.15.4 EUI-64, traceable session, and
+manifest state. GPS, EG912, rail, GPIO, ADC, PWM, and ZCD tests remain pending.
+Every run finishes with `safe` and `session.abort`, including failed runs.
+
+Run the station-runner unit tests without hardware:
+
+```powershell
+python -m unittest tools.test_s5otbrft_runner -v
+```
+
 ## Hardware verification still required
 
 Before production use, execute and retain hardware evidence for:
