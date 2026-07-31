@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import unittest
 from pathlib import Path
 from typing import Any
@@ -216,6 +218,15 @@ class RunnerTests(unittest.TestCase):
         client = S5OTBRFTClient(BadSequenceSerial(), "FAKE")
         with self.assertRaises(ProtocolError):
             client.command("identity", timeout_s=0.1)
+
+    def test_verbose_client_prints_frames(self) -> None:
+        output = io.StringIO()
+        client = S5OTBRFTClient(FakeSerial(), "FAKE", verbose=True)
+        with contextlib.redirect_stdout(output):
+            client.command("identity")
+        text = output.getvalue()
+        self.assertIn("[TX] @S5OTBRFT", text)
+        self.assertIn("[RX] @S5OTBRFT", text)
 
     def test_profile_is_nonproduction(self) -> None:
         profile, digest = load_profile(Path(DEFAULT_PROFILE))

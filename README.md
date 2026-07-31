@@ -88,6 +88,15 @@ python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001
 python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01
 ```
 
+Development runs show `[START]`, `[TEST]`, `[PASS]`, `[PARTIAL]`, `[FAIL]`,
+and `[CLEANUP]` progress directly in the terminal. Add `--verbose` to print
+every transmitted and received protocol frame:
+
+```powershell
+python -m tools.s5otbrft_runner self-test --port COM9 --unit-id BENCH-001 --verbose
+python -m tools.s5otbrft_runner guided-test --port COM9 --unit-id BENCH-001 --operator-id OP-01 --verbose
+```
+
 `--port` and `--unit-id` are optional when exactly one matching DUT is
 connected. Without a unit ID, the runner derives an engineering identifier
 from the base MAC. Reports are written atomically under `reports/`.

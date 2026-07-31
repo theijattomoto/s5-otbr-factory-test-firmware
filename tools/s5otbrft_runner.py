@@ -86,18 +86,22 @@ class S5OTBRFTClient:
         serial_port: Any,
         port_name: str,
         monotonic: Callable[[], float] = time.monotonic,
+        verbose: bool = False,
     ) -> None:
         self.serial = serial_port
         self.port_name = port_name
         self._monotonic = monotonic
         self._rx_buffer = bytearray()
         self._next_sequence = 1
+        self.verbose = verbose
         self.transcript: list[dict[str, Any]] = []
 
     def _record(self, direction: str, line: str) -> None:
         self.transcript.append(
             {"timestamp_utc": utc_now(), "direction": direction, "line": line}
         )
+        if self.verbose:
+            print(f"[{direction.upper()}] {line}", flush=True)
 
     def _pop_line(self) -> str | None:
         positions = [
@@ -372,6 +376,7 @@ def run_partial_self_test(
     operator_id: str | None = None,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     guided = operator_id is not None
     if guided and re.fullmatch(r"[A-Za-z0-9_.-]{1,20}", operator_id) is None:
@@ -380,6 +385,7 @@ def run_partial_self_test(
             "or hyphen"
         )
     errors: list[str] = []
+    emit = progress if progress is not None else (lambda _: None)
     report: dict[str, Any] = {
         "schema_version": 1,
         "tool": {"name": "s5otbrft_runner", "version": TOOL_VERSION},
@@ -408,6 +414,7 @@ def run_partial_self_test(
     }
 
     try:
+        emit("[TEST] Device identity and USB protocol")
         identity_response = client.command("identity")
         identity = validate_identity(identity_response, profile)
         report["identity"] = {
@@ -419,12 +426,19 @@ def run_partial_self_test(
         }
         unit_id = requested_unit_id or derive_unit_id(identity)
         report["unit_id"] = unit_id
+        emit(
+            f"[PASS] Identity: {identity['base_mac']} / "
+            f"{identity['thread_eui64']}"
+        )
 
+        emit(f"[TEST] Start traceable session: {unit_id}")
         require_ok(
             client.command("session.start", unit_id=unit_id),
             "session.start",
         )
+        emit("[PASS] Session started")
 
+        emit("[TEST] GPS UART and checksum-valid RMC reception")
         gps_timeout_ms = int(profile["gps_timeout_ms"])
         report["gps"] = validate_gps(
             client.command(
@@ -433,7 +447,12 @@ def run_partial_self_test(
                 timeout_ms=gps_timeout_ms,
             )
         )
+        emit(
+            f"[PASS] GPS UART: "
+            f"{report['gps']['valid_rmc_sentences']} valid RMC"
+        )
 
+        emit("[TEST] EG912 UART, model identity and SIM readiness")
         modem_timeout_ms = int(profile["modem_timeout_ms"])
         report["modem"] = validate_modem(
             client.command(
@@ -442,8 +461,10 @@ def run_partial_self_test(
                 timeout_ms=modem_timeout_ms,
             )
         )
+        emit(f"[PASS] EG912: {report['modem']['identity']}")
 
         for channel in ("vrms", "irms", "dc5v"):
+            emit(f"[TEST] ADC snapshot: {channel}")
             report["adc_snapshots"][channel] = validate_adc(
                 client.command(
                     "adc.sample",
@@ -451,6 +472,12 @@ def run_partial_self_test(
                     samples=int(profile["adc_samples"]),
                 ),
                 channel,
+            )
+            sample = report["adc_snapshots"][channel]
+            emit(
+                f"[PASS] ADC {channel}: avg={sample['raw_average']} "
+                f"min={sample['raw_min']} max={sample['raw_max']} "
+                f"noise={sample['raw_noise']}"
             )
 
         if guided:
@@ -467,6 +494,7 @@ def run_partial_self_test(
                 report["leds"][command_name] = observations
                 passed = True
                 for level, expected in led_states:
+                    emit(f"[TEST] {display_name}: expected {expected}")
                     data = require_ok(
                         client.command(
                             "gpio.write", name=command_name, level=level
@@ -491,6 +519,7 @@ def run_partial_self_test(
                     if not confirmed:
                         passed = False
                         break
+                    emit(f"[PASS] {display_name}: observed {expected}")
 
                 states = "".join(
                     "Y" if observation["confirmed"] else "N"
@@ -513,6 +542,7 @@ def run_partial_self_test(
                         f"{display_name} did not match the expected state"
                     )
 
+        emit("[TEST] Capture and validate manifest")
         manifest_data = require_ok(
             client.command("session.list"), "session.list"
         )
@@ -549,15 +579,32 @@ def run_partial_self_test(
         if not report["manifest"]["pending"]:
             raise ValidationError("Partial run must retain pending tests")
         report["result"] = "PARTIAL"
+        emit(
+            f"[PARTIAL] passed={len(report['manifest']['passed'])} "
+            f"pending={len(report['manifest']['pending'])} failed=0"
+        )
     except Exception as exc:
         errors.append(str(exc))
         report["result"] = "FAIL"
+        emit(f"[FAIL] {exc}")
     finally:
+        emit("[CLEANUP] Restore safe outputs")
         report["safety_cleanup"]["safe"] = best_effort_command(
             client, "safe", errors
         )
+        emit(
+            "[PASS] Safe state restored"
+            if report["safety_cleanup"]["safe"]
+            else "[FAIL] Safe-state command failed"
+        )
+        emit("[CLEANUP] Abort partial session")
         report["safety_cleanup"]["abort"] = best_effort_command(
             client, "session.abort", errors
+        )
+        emit(
+            "[PASS] Session aborted"
+            if report["safety_cleanup"]["abort"]
+            else "[FAIL] Session abort failed"
         )
         if not all(report["safety_cleanup"].values()):
             report["result"] = "FAIL"
@@ -594,7 +641,7 @@ def serial_modules() -> tuple[Any, Any]:
     return serial, list_ports
 
 
-def open_client(port: str) -> tuple[Any, S5OTBRFTClient]:
+def open_client(port: str, verbose: bool = False) -> tuple[Any, S5OTBRFTClient]:
     serial, _ = serial_modules()
     handle = serial.Serial(
         port=port,
@@ -606,11 +653,13 @@ def open_client(port: str) -> tuple[Any, S5OTBRFTClient]:
         write_timeout=1.0,
     )
     time.sleep(0.15)
-    return handle, S5OTBRFTClient(handle, port)
+    return handle, S5OTBRFTClient(handle, port, verbose=verbose)
 
 
 def discover_devices(
-    profile: dict[str, Any], candidate_port: str | None = None
+    profile: dict[str, Any],
+    candidate_port: str | None = None,
+    verbose: bool = False,
 ) -> list[dict[str, Any]]:
     _, list_ports = serial_modules()
     ports = [candidate_port] if candidate_port else [
@@ -620,7 +669,9 @@ def discover_devices(
     for port in ports:
         handle = None
         try:
-            handle, client = open_client(port)
+            if verbose:
+                print(f"[PROBE] {port}", flush=True)
+            handle, client = open_client(port, verbose=verbose)
             ready_seen = client.observe_ready()
             response = client.command("identity", timeout_s=2.5)
             identity = validate_identity(response, profile)
@@ -644,10 +695,12 @@ def discover_devices(
     return devices
 
 
-def select_port(profile: dict[str, Any], explicit_port: str | None) -> str:
+def select_port(
+    profile: dict[str, Any], explicit_port: str | None, verbose: bool = False
+) -> str:
     if explicit_port:
         return explicit_port
-    devices = discover_devices(profile)
+    devices = discover_devices(profile, verbose=verbose)
     if not devices:
         raise S5OTBRFTError("No matching S5 Node-OTBR factory DUT found")
     if len(devices) > 1:
@@ -672,6 +725,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     discover = subparsers.add_parser("discover", help="Find matching DUTs")
     discover.add_argument("--port", help="Probe only this serial port")
+    discover.add_argument(
+        "--verbose", action="store_true", help="Print raw protocol frames"
+    )
 
     self_test = subparsers.add_parser(
         "self-test", help="Run automatic no-fixture partial test"
@@ -679,6 +735,9 @@ def build_parser() -> argparse.ArgumentParser:
     self_test.add_argument("--port", help="Serial port; auto-detected if omitted")
     self_test.add_argument("--unit-id", help="Barcode; defaults to base MAC")
     self_test.add_argument("--output", type=Path, help="JSON report path")
+    self_test.add_argument(
+        "--verbose", action="store_true", help="Print raw protocol frames"
+    )
     for operation, help_text in (
         ("guided-test", "Run automatic tests plus guided LED checks"),
         ("led-check", "Compatibility alias for guided-test"),
@@ -694,6 +753,9 @@ def build_parser() -> argparse.ArgumentParser:
             help="Operator identifier using 1..20 safe characters",
         )
         guided.add_argument("--output", type=Path, help="JSON report path")
+        guided.add_argument(
+            "--verbose", action="store_true", help="Print raw protocol frames"
+        )
     return parser
 
 
@@ -702,12 +764,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         profile, profile_hash = load_profile(args.profile)
         if args.operation == "discover":
-            devices = discover_devices(profile, args.port)
+            devices = discover_devices(profile, args.port, args.verbose)
             print(json.dumps({"devices": devices}, indent=2, sort_keys=True))
             return 0 if devices else 2
 
-        port = select_port(profile, args.port)
-        handle, client = open_client(port)
+        port = select_port(profile, args.port, args.verbose)
+        print(f"[START] {args.operation} on {port}", flush=True)
+        handle, client = open_client(port, verbose=args.verbose)
         try:
             client.observe_ready()
             report = run_partial_self_test(
@@ -720,6 +783,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.operation in {"guided-test", "led-check"}
                     else None
                 ),
+                progress=lambda message: print(message, flush=True),
             )
         finally:
             handle.close()
